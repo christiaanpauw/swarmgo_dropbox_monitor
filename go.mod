@@ -2,7 +2,10 @@ module github.com/christiaanpauw/swarmgo_dropbox_monitor
 
 go 1.23
 
-require github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.0.5
+require (
+	github.com/dropbox/dropbox-sdk-go-unofficial/v6 v6.0.5
+	github.com/joho/godotenv v1.5.1
+)
 
 require (
 	github.com/golang/protobuf v1.4.2 // indirect

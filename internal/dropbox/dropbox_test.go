@@ -8,9 +8,9 @@ import (
 )
 
 func init() {
-    err := godotenv.Load()
+    err := godotenv.Load("../../.env")
     if err != nil {
-        log.Fatalf("Error loading .env file")
+        log.Fatalf("Error loading .env file - 1")
     }
 }
 
@@ -23,14 +23,14 @@ func TestTestConnection(t *testing.T) {
     log.Printf("Current working directory: %s", cwd)
 
     // Check if .env file exists
-    if _, err := os.Stat(".env"); os.IsNotExist(err) {
+    if _, err := os.Stat("../../.env"); os.IsNotExist(err) {
         t.Fatalf(".env file does not exist")
     }
 
     // Load environment variables from .env file
-    err = godotenv.Load()
+    err = godotenv.Load("../../.env")
     if err != nil {
-        t.Fatalf("Error loading .env file")
+        t.Fatalf("Error loading .env file - 2")
     }
 
     // Backup current environment variable

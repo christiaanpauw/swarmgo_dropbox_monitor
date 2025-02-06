@@ -21,6 +21,32 @@ SwarmGo Dropbox Monitor is a Go application designed to monitor and interact wit
     go mod tidy
     ```
 
+3. **Using the .env File for Environment Variables**
+   
+Create a .env file in the root directory of your project with the following content:
+
+
+``` env
+# Dropbox API token
+DROPBOX_ACCESS_TOKEN=your_dropbox_api_token
+
+# SMTP Configuration
+SMTP_SERVER=smtp.yourserver.com
+SMTP_PORT=587
+SMTP_USER=your_smtp_user
+SMTP_PASS=your_smtp_password
+NOTIFY_EMAIL=your_email@example.com
+```
+4. **Install the godotenv package** if you haven't already:
+
+```bash
+go get github.com/joho/godotenv
+```
+
+5 **Ensure your Go files are set up** to load the .env file.
+
+This is already done in the provided code.
+
 ## Usage
 
 1. **Run the application**:

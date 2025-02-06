@@ -15,7 +15,7 @@ func init() {
         log.Fatalf("Error loading .env file - 1")
     }
 
-    fmt.Println("Environment Variables:")
+    fmt.Println("Environment Variables after loading .env:")
     for _, e := range os.Environ() {
         fmt.Println(e)
     }
@@ -51,17 +51,16 @@ func TestTestConnection(t *testing.T) {
 
     // Test case: Environment variable set to a valid value
     token := getDropboxAccessToken()
-    fmt.Println("DROPBOX_ACCESS_TOKEN:", token)
     if token == "" {
         t.Fatalf("DROPBOX_ACCESS_TOKEN not found in environment variables")
     }
-    err = TestConnection()
+    err = testConnection()
     if err != nil {
         t.Errorf("Expected no error, got %v", err)
     }
 }
 
-func TestConnection() error {
+func testConnection() error {
     token := getDropboxAccessToken()
     fmt.Println("DROPBOX_ACCESS_TOKEN:", token)
 

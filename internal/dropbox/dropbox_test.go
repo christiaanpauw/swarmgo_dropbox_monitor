@@ -15,8 +15,20 @@ func init() {
 }
 
 func TestTestConnection(t *testing.T) {
+    // Log the current working directory
+    cwd, err := os.Getwd()
+    if err != nil {
+        t.Fatalf("Error getting current working directory: %v", err)
+    }
+    log.Printf("Current working directory: %s", cwd)
+
+    // Check if .env file exists
+    if _, err := os.Stat(".env"); os.IsNotExist(err) {
+        t.Fatalf(".env file does not exist")
+    }
+
     // Load environment variables from .env file
-    err := godotenv.Load()
+    err = godotenv.Load()
     if err != nil {
         t.Fatalf("Error loading .env file")
     }

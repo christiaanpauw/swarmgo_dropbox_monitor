@@ -1,0 +1,8 @@
+# Dropbox API token
+DROPBOX_API_TOKEN=your_dropbox_api_token
+
+# Scheduler interval in minutes
+SCHEDULER_INTERVAL=15
+
+# Log level (e.g., INFO, DEBUG, ERROR)
+LOG_LEVEL=INFO

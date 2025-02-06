@@ -21,6 +21,8 @@ func init() {
     }
 }
 
+fmt.Println(getDropboxAccessToken())
+
 func getDropboxAccessToken() string {
     for _, e := range os.Environ() {
         if strings.HasPrefix(e, "DROPBOX_ACCESS_TOKEN=") {

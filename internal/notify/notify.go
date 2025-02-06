@@ -5,7 +5,16 @@ import (
 	"log"
 	"net/smtp"
 	"os"
+
+	"github.com/joho/godotenv"
 )
+
+func init() {
+    err := godotenv.Load()
+    if err != nil {
+        log.Fatalf("Error loading .env file")
+    }
+}
 
 // Send sends the Dropbox report via email
 func Send(report string) error {

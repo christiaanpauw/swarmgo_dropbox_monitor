@@ -21,7 +21,8 @@ func init() {
     }
 }
 
-fmt.Println(getDropboxAccessToken())
+token := getDropboxAccessToken("DROPBOX_ACCESS_TOKEN:", token)
+fmt.Println()
 
 func getDropboxAccessToken() string {
     for _, e := range os.Environ() {

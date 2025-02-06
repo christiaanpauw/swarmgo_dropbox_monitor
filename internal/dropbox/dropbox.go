@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
         "github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/state"

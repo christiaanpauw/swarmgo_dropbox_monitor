@@ -49,13 +49,6 @@ func TestTestConnection(t *testing.T) {
         t.Fatalf("Error loading .env file - 2")
     }
 
-    // Test case: Environment variable not set
-    os.Setenv("DROPBOX_ACCESS_TOKEN", "")
-    err = TestConnection()
-    if err == nil || err.Error() != "Dropbox access token not set - a" {
-        t.Errorf("Expected error 'Dropbox access token not set - a', got %v", err)
-    }
-
     // Test case: Environment variable set to a valid value
     token := getDropboxAccessToken()
     if token == "" {

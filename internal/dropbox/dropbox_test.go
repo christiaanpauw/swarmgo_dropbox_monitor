@@ -1,6 +1,7 @@
 package dropbox
 
 import (
+    "fmt"
     "log"
     "os"
     "testing"
@@ -11,6 +12,11 @@ func init() {
     err := godotenv.Load("../../.env")
     if err != nil {
         log.Fatalf("Error loading .env file - 1")
+    }
+
+fmt.Println("Environment Variables:")
+    for _, e := range os.Environ() {
+        fmt.Println(e)
     }
 }
 
@@ -37,7 +43,7 @@ func TestTestConnection(t *testing.T) {
     originalToken := os.Getenv("DROPBOX_ACCESS_TOKEN")
 
     // Test case: Environment variable not set
-    os.Setenv("DROPBOX_ACCESS_TOKEN", "")
+    os.Setenv("DROPBOX_ACCESS_TOKEN", originalToken)
     err = TestConnection()
     if err == nil || err.Error() != "Dropbox access token not set" {
         t.Errorf("Expected error 'Dropbox access token not set', got %v", err)

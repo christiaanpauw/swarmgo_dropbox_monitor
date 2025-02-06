@@ -22,7 +22,7 @@ func init() {
 func TestConnection() error {
 	token := os.Getenv("DROPBOX_ACCESS_TOKEN")
 	if token == "" {
-		return fmt.Errorf("Dropbox access token not set")
+		return fmt.Errorf("Dropbox access token not set - a")
 	}
 
 	config := dropbox.Config{Token: token}
@@ -31,7 +31,7 @@ func TestConnection() error {
 	// 🔹 Make a test API call to list root folder
 	_, err := dbx.ListFolder(files.NewListFolderArg(""))
 	if err != nil {
-		return fmt.Errorf("failed to connect to Dropbox API: %v", err)
+		return fmt.Errorf("failed to connect to Dropbox API: %v - a", err)
 	}
 
 	return nil
@@ -41,7 +41,7 @@ func TestConnection() error {
 func CheckForChanges() ([]string, error) {
 	token := os.Getenv("DROPBOX_ACCESS_TOKEN")
 	if token == "" {
-		return nil, fmt.Errorf("Dropbox access token not set")
+		return nil, fmt.Errorf("Dropbox access token not set - b")
 	}
 
 	config := dropbox.Config{Token: token}

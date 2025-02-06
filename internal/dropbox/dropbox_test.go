@@ -6,6 +6,13 @@ import (
     "github.com/joho/godotenv"
 )
 
+func init() {
+    err := godotenv.Load()
+    if err != nil {
+        log.Fatalf("Error loading .env file")
+    }
+}
+
 func TestTestConnection(t *testing.T) {
     // Load environment variables from .env file
     err := godotenv.Load()

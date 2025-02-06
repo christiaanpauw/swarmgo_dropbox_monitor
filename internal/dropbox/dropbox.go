@@ -18,9 +18,18 @@ func init() {
     }
 }
 
+func getDropboxAccessToken() string {
+    for _, e := range os.Environ() {
+        if strings.HasPrefix(e, "DROPBOX_ACCESS_TOKEN=") {
+            return strings.TrimPrefix(e, "DROPBOX_ACCESS_TOKEN=")
+        }
+    }
+    return ""
+}
+
 // TestConnection verifies Dropbox authentication on startup
 func TestConnection() error {
-	token := os.Getenv("DROPBOX_ACCESS_TOKEN")
+	token := getDropboxAccessToken()
 	fmt.Println("DROPBOX_ACCESS_TOKEN:", token)
 	if token == "" {
 		return fmt.Errorf("Dropbox access token not set - a")
@@ -40,7 +49,7 @@ func TestConnection() error {
 
 // CheckForChanges connects to Dropbox and checks for file changes since the last check
 func CheckForChanges() ([]string, error) {
-	token := os.Getenv("DROPBOX_ACCESS_TOKEN")
+	token := getDropboxAccessToken()
 	if token == "" {
 		return nil, fmt.Errorf("Dropbox access token not set - b")
 	}

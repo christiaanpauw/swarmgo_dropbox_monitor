@@ -21,9 +21,6 @@ func init() {
     }
 }
 
-token := getDropboxAccessToken("DROPBOX_ACCESS_TOKEN:", token)
-fmt.Println()
-
 func getDropboxAccessToken() string {
     for _, e := range os.Environ() {
         if strings.HasPrefix(e, "DROPBOX_ACCESS_TOKEN=") {
@@ -54,6 +51,7 @@ func TestTestConnection(t *testing.T) {
 
     // Test case: Environment variable set to a valid value
     token := getDropboxAccessToken()
+    fmt.Println("DROPBOX_ACCESS_TOKEN:", token)
     if token == "" {
         t.Fatalf("DROPBOX_ACCESS_TOKEN not found in environment variables")
     }

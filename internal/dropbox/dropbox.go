@@ -21,6 +21,7 @@ func init() {
 // TestConnection verifies Dropbox authentication on startup
 func TestConnection() error {
 	token := os.Getenv("DROPBOX_ACCESS_TOKEN")
+	fmt.Println("DROPBOX_ACCESS_TOKEN:", token)
 	if token == "" {
 		return fmt.Errorf("Dropbox access token not set - a")
 	}

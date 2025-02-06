@@ -4,10 +4,19 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/joho/godotenv"
         "github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/state"
 	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox/files"
 	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox"
 )
+
+func init() {
+    err := godotenv.Load()
+    if err != nil {
+        log.Fatalf("Error loading .env file")
+    }
+}
 
 // TestConnection verifies Dropbox authentication on startup
 func TestConnection() error {

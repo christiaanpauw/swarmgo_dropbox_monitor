@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ .title }}</title>
+</head>
+<body>
+    <h1>Dropbox Folders</h1>
+    <table border="1">
+        <tr>
+            <th>Folder Name</th>
+        </tr>
+        {{range .folders}}
+        <tr>
+            <td>{{.}}</td>
+        </tr>
+        {{else}}
+        <tr>
+            <td>No folders found.</td>
+        </tr>
+        {{end}}
+    </table>
+</body>
+</html>

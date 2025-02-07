@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ .title }}</title>
+</head>
+<body>
+    <h1>Changes in Last 24 Hours</h1>
+    <table border="1">
+        <tr>
+            <th>Folder Name</th>
+            <th>Last Modified</th>
+        </tr>
+        {{range .folders}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>{{.LastModified}}</td>
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="2">No changes in the last 24 hours.</td>
+        </tr>
+        {{end}}
+    </table>
+</body>
+</html>

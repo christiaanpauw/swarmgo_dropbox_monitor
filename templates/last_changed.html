@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ .title }}</title>
+</head>
+<body>
+    <h1>Last Changed Dates</h1>
+    <table border="1">
+        <tr>
+            <th>Folder Name</th>
+            <th>Last Modified</th>
+        </tr>
+        {{range .folders}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>{{.LastModified}}</td>
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="2">No folders found.</td>
+        </tr>
+        {{end}}
+    </table>
+</body>
+</html>

@@ -219,6 +219,7 @@ func GetLastChangedFolders() []FolderInfo {
 	dbx := files.New(config)
 
 	arg := files.NewListFolderArg("")
+	arg.Recursive = true // fetch all entries recursively
 	res, err := dbx.ListFolder(arg)
 	if err != nil {
 		log.Printf("Error listing folders: %v", err)
@@ -227,22 +228,11 @@ func GetLastChangedFolders() []FolderInfo {
 
 	var folderInfos []FolderInfo
 	for _, entry := range res.Entries {
-		if folder, ok := entry.(*files.FolderMetadata); ok {
-			folderArg := files.NewListFolderArg(folder.PathLower)
-			folderRes, err := dbx.ListFolder(folderArg)
-			if err != nil {
-				log.Printf("Error checking folder %s: %v", folder.Name, err)
-				continue
-			}
-
-			for _, fileEntry := range folderRes.Entries {
-				if fileMetadata, ok := fileEntry.(*files.FileMetadata); ok {
-					folderInfos = append(folderInfos, FolderInfo{
-						Name:         fileMetadata.Name,
-						LastModified: fileMetadata.ClientModified.String(),
-					})
-				}
-			}
+		if fileMetadata, ok := entry.(*files.FileMetadata); ok {
+			folderInfos = append(folderInfos, FolderInfo{
+				Name:         fileMetadata.Name,
+				LastModified: fileMetadata.ClientModified.String(),
+			})
 		}
 	}
 	return folderInfos
@@ -253,6 +243,7 @@ func GetChangesLast24Hours() []FolderInfo {
 	dbx := files.New(config)
 
 	arg := files.NewListFolderArg("")
+	arg.Recursive = true
 	res, err := dbx.ListFolder(arg)
 	if err != nil {
 		log.Printf("Error listing folders: %v", err)
@@ -262,23 +253,12 @@ func GetChangesLast24Hours() []FolderInfo {
 	var folderInfos []FolderInfo
 	cutoffTime := time.Now().Add(-24 * time.Hour)
 	for _, entry := range res.Entries {
-		if folder, ok := entry.(*files.FolderMetadata); ok {
-			folderArg := files.NewListFolderArg(folder.PathLower)
-			folderRes, err := dbx.ListFolder(folderArg)
-			if err != nil {
-				log.Printf("Error checking folder %s: %v", folder.Name, err)
-				continue
-			}
-
-			for _, fileEntry := range folderRes.Entries {
-				if fileMetadata, ok := fileEntry.(*files.FileMetadata); ok {
-					if fileMetadata.ClientModified.After(cutoffTime) {
-						folderInfos = append(folderInfos, FolderInfo{
-							Name:         fileMetadata.Name,
-							LastModified: fileMetadata.ClientModified.String(),
-						})
-					}
-				}
+		if fileMetadata, ok := entry.(*files.FileMetadata); ok {
+			if fileMetadata.ClientModified.After(cutoffTime) {
+				folderInfos = append(folderInfos, FolderInfo{
+					Name:         fileMetadata.Name,
+					LastModified: fileMetadata.ClientModified.String(),
+				})
 			}
 		}
 	}

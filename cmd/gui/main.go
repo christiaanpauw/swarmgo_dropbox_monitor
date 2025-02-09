@@ -2,79 +2,73 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/dropbox"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
 )
 
-func createResultContainer(title string, entries []dropbox.FolderInfo) fyne.CanvasObject {
-	header := widget.NewLabel(fmt.Sprintf("%s (%d entries)", title, len(entries)))
-	vbox := container.NewVBox(header)
-	for _, entry := range entries {
-		vbox.Add(widget.NewLabel(fmt.Sprintf("%s - %s", entry.Name, entry.LastModified)))
-	}
-	return vbox
-}
-
-func buttonContainer(btnListFolders, btnLastChanged, btnChanges24h *widget.Button) *fyne.Container {
-	return container.NewHBox(btnListFolders, btnLastChanged, btnChanges24h)
-}
-
 func main() {
-	a := app.New()
-	w := a.NewWindow("Dropbox Monitor GUI")
-	w.Resize(fyne.NewSize(800, 600))
+	myApp := app.New()
+	window := myApp.NewWindow("Dropbox Monitor")
 
-	// Declare buttons as variables so they can be used in closures
-	var btnListFolders, btnLastChanged, btnChanges24h *widget.Button
+	// Create Dropbox client
+	client, err := dropbox.NewDropboxClient()
+	if err != nil {
+		log.Fatalf("Error creating Dropbox client: %v", err)
+	}
 
-	btnListFolders = widget.NewButton("List Folders", func() {
-		folderNames := dropbox.GetFolders()
-		var infos []dropbox.FolderInfo
-		for _, name := range folderNames {
-			infos = append(infos, dropbox.FolderInfo{Name: name, LastModified: "N/A"})
-		}
-		content := createResultContainer("List Folders", infos)
-		w.SetContent(container.NewBorder(
-			buttonContainer(btnListFolders, btnLastChanged, btnChanges24h),
-			nil,
-			nil,
-			nil,
-			container.NewVScroll(content),
-		))
+	// Create output text area
+	output := widget.NewTextGrid()
+	output.SetText("Welcome to Dropbox Monitor!\nClick 'Check Now' to check for file changes.")
+
+	// Create Check Now button
+	checkButton := widget.NewButton("Check Now", func() {
+		output.SetText("Checking for changes...")
+		go func() {
+			changes, err := client.GetChangesLast24Hours()
+			if err != nil {
+				output.SetText(fmt.Sprintf("Error checking changes: %v", err))
+				return
+			}
+
+			// Prepare the report
+			var report string
+			if len(changes) > 0 {
+				report = fmt.Sprintf("Files changed in the last 24 hours (as of %s):\n\n", time.Now().Format("2006-01-02 15:04:05"))
+				report += strings.Join(changes, "\n")
+			} else {
+				report = "No file changes detected in the last 24 hours."
+			}
+
+			// Update GUI
+			output.SetText(report)
+
+			// Send notification
+			err = notify.Send(report)
+			if err != nil {
+				log.Printf("Error sending notification: %v", err)
+				output.SetText(output.Text() + "\n\nError sending notification: " + err.Error())
+			} else {
+				output.SetText(output.Text() + "\n\nNotification sent successfully!")
+			}
+		}()
 	})
 
-	btnLastChanged = widget.NewButton("Last Changed Dates", func() {
-		infos := dropbox.GetLastChangedFolders()
-		content := createResultContainer("Last Changed", infos)
-		w.SetContent(container.NewBorder(
-			buttonContainer(btnListFolders, btnLastChanged, btnChanges24h),
-			nil,
-			nil,
-			nil,
-			container.NewVScroll(content),
-		))
-	})
-
-	btnChanges24h = widget.NewButton("Changes in Last 24 Hours", func() {
-		infos := dropbox.GetChangesLast24Hours()
-		content := createResultContainer("Changes Last 24 Hours", infos)
-		w.SetContent(container.NewBorder(
-			buttonContainer(btnListFolders, btnLastChanged, btnChanges24h),
-			nil,
-			nil,
-			nil,
-			container.NewVScroll(content),
-		))
-	})
-
-	initialContent := container.NewVBox(
-		buttonContainer(btnListFolders, btnLastChanged, btnChanges24h),
-		widget.NewLabel("Select an action to view Dropbox info."),
+	// Create layout
+	content := container.NewVBox(
+		widget.NewLabel("Dropbox Monitor"),
+		checkButton,
+		output,
 	)
-	w.SetContent(initialContent)
-	w.ShowAndRun()
+
+	window.SetContent(content)
+	window.Resize(fyne.NewSize(600, 400))
+	window.ShowAndRun()
 }

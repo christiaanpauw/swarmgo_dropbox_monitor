@@ -1,0 +1,120 @@
+package agents
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/db"
+	"github.com/prathyushnallamothu/swarmgo"
+)
+
+// ContentAnalysisAgent handles file content analysis and summarization
+type ContentAnalysisAgent struct {
+	agent *swarmgo.Agent
+	db    *db.DB
+}
+
+// NewContentAnalysisAgent creates a new content analysis agent
+func NewContentAnalysisAgent(db *db.DB) *ContentAnalysisAgent {
+	agent := &swarmgo.Agent{
+		Name: "ContentAnalysisAgent",
+		Instructions: `You are a content analysis agent responsible for processing and summarizing file changes.
+Your tasks include:
+1. Analyzing file contents for key information
+2. Generating concise summaries
+3. Identifying themes and patterns
+4. Creating semantic embeddings
+5. Extracting relevant metadata`,
+		Model: "gpt-4",
+		Functions: []swarmgo.AgentFunction{
+			{
+				Name:        "analyzeContent",
+				Description: "Analyze file content and generate summary",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"fileContent": map[string]interface{}{
+							"type":        "string",
+							"description": "Content of the file to analyze",
+						},
+						"fileType": map[string]interface{}{
+							"type":        "string",
+							"description": "Type of the file",
+						},
+					},
+					"required": []interface{}{"fileContent", "fileType"},
+				},
+				Function: func(args map[string]interface{}, contextVars map[string]interface{}) swarmgo.Result {
+					content := args["fileContent"].(string)
+					fileType := args["fileType"].(string)
+
+					// Here we would integrate with OpenAI's API to:
+					// 1. Generate embeddings for semantic search
+					// 2. Create a summary of the content
+					// 3. Extract key themes and metadata
+
+					// For now, we'll return a placeholder result
+					analysis := map[string]interface{}{
+						"summary":    "Content analysis placeholder",
+						"themes":     []string{"theme1", "theme2"},
+						"embedding":  []float32{0.1, 0.2, 0.3}, // This would be the actual embedding vector
+						"fileType":   fileType,
+						"wordCount":  len(content),
+						"sentiment": "neutral",
+					}
+
+					resultJSON, _ := json.Marshal(analysis)
+					return swarmgo.Result{
+						Value: string(resultJSON),
+					}
+				},
+			},
+			{
+				Name:        "generateDailySummary",
+				Description: "Generate a summary of all changes for the day",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"date": map[string]interface{}{
+							"type":        "string",
+							"description": "Date to summarize",
+						},
+					},
+					"required": []interface{}{"date"},
+				},
+				Function: func(args map[string]interface{}, contextVars map[string]interface{}) swarmgo.Result {
+					// Here we would:
+					// 1. Fetch all changes for the day
+					// 2. Analyze patterns and trends
+					// 3. Generate a comprehensive summary
+					
+					summary := map[string]interface{}{
+						"totalChanges": 10,
+						"summary":     "Daily summary placeholder",
+						"highlights":  []string{"highlight1", "highlight2"},
+						"statistics": map[string]interface{}{
+							"byPortfolio": map[string]int{"portfolio1": 5, "portfolio2": 5},
+							"byType":      map[string]int{"doc": 7, "code": 3},
+						},
+					}
+
+					resultJSON, _ := json.Marshal(summary)
+					return swarmgo.Result{
+						Value: string(resultJSON),
+					}
+				},
+			},
+		},
+	}
+
+	return &ContentAnalysisAgent{
+		agent: agent,
+		db:    db,
+	}
+}
+
+// GetAgent returns the swarmgo Agent instance
+func (c *ContentAnalysisAgent) GetAgent() *swarmgo.Agent {
+	return c.agent
+}

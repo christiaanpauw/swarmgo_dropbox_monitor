@@ -1,0 +1,137 @@
+package agents
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/db"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
+	"github.com/prathyushnallamothu/swarmgo"
+)
+
+// ReportGeneratorAgent handles report creation and email delivery
+type ReportGeneratorAgent struct {
+	agent   *swarmgo.Agent
+	db      *db.DB
+	notifier *notify.Notifier
+}
+
+// NewReportGeneratorAgent creates a new report generator agent
+func NewReportGeneratorAgent(db *db.DB, notifier *notify.Notifier) *ReportGeneratorAgent {
+	agent := &swarmgo.Agent{
+		Name: "ReportGeneratorAgent",
+		Instructions: `You are a report generator agent responsible for creating and sending file change reports.
+Your tasks include:
+1. Creating well-formatted email reports
+2. Including relevant statistics and visualizations
+3. Organizing content by portfolio and project
+4. Highlighting important changes
+5. Sending reports via email`,
+		Model: "gpt-4",
+		Functions: []swarmgo.AgentFunction{
+			{
+				Name:        "generateReport",
+				Description: "Generate a report from analyzed content",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"date": map[string]interface{}{
+							"type":        "string",
+							"description": "Date for the report",
+						},
+						"format": map[string]interface{}{
+							"type":        "string",
+							"description": "Format of the report (html/text)",
+						},
+					},
+					"required": []interface{}{"date", "format"},
+				},
+				Function: func(args map[string]interface{}, contextVars map[string]interface{}) swarmgo.Result {
+					date := args["date"].(string)
+					format := args["format"].(string)
+
+					// Here we would:
+					// 1. Fetch the daily summary from the database
+					// 2. Format it according to the specified format
+					// 3. Add visualizations if format is HTML
+					// 4. Structure the content hierarchically
+
+					reportData := map[string]interface{}{
+						"date":    date,
+						"format":  format,
+						"content": "Report content placeholder",
+						"stats": map[string]interface{}{
+							"totalChanges": 10,
+							"byPortfolio": map[string]int{
+								"portfolio1": 5,
+								"portfolio2": 5,
+							},
+						},
+					}
+
+					resultJSON, _ := json.Marshal(reportData)
+					return swarmgo.Result{
+						Value: string(resultJSON),
+					}
+				},
+			},
+			{
+				Name:        "sendReport",
+				Description: "Send the generated report via email",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"recipients": map[string]interface{}{
+							"type":        "array",
+							"items":       map[string]interface{}{"type": "string"},
+							"description": "List of email recipients",
+						},
+						"subject": map[string]interface{}{
+							"type":        "string",
+							"description": "Email subject",
+						},
+						"content": map[string]interface{}{
+							"type":        "string",
+							"description": "Report content",
+						},
+					},
+					"required": []interface{}{"recipients", "subject", "content"},
+				},
+				Function: func(args map[string]interface{}, contextVars map[string]interface{}) swarmgo.Result {
+					recipients := args["recipients"].([]interface{})
+					subject := args["subject"].(string)
+					content := args["content"].(string)
+
+					// Convert recipients to string slice
+					recipientsList := make([]string, len(recipients))
+					for i, r := range recipients {
+						recipientsList[i] = r.(string)
+					}
+
+					err := notifier.SendEmail(recipientsList, subject, content)
+					if err != nil {
+						return swarmgo.Result{
+							Error: fmt.Sprintf("failed to send email: %v", err),
+						}
+					}
+
+					return swarmgo.Result{
+						Value: fmt.Sprintf("Successfully sent report to %d recipients", len(recipients)),
+					}
+				},
+			},
+		},
+	}
+
+	return &ReportGeneratorAgent{
+		agent:    agent,
+		db:       db,
+		notifier: notifier,
+	}
+}
+
+// GetAgent returns the swarmgo Agent instance
+func (r *ReportGeneratorAgent) GetAgent() *swarmgo.Agent {
+	return r.agent
+}

@@ -45,7 +45,7 @@ func NewMonitor(dbConnStr string) (*Monitor, error) {
 	}
 
 	// Initialize DatabaseAgent
-	dbAgent := agents.NewDatabaseAgent(db)
+	dbAgent := agents.NewDatabaseAgent(dbConnStr)
 
 	return &Monitor{
 		DB:            db,

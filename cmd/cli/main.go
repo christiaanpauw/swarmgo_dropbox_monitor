@@ -1,16 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"time"
+	"path/filepath"
 
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/core"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/report"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/agents"
 	"github.com/joho/godotenv"
-	"github.com/robfig/cron/v3"
 )
 
 func main() {
@@ -23,94 +22,65 @@ func main() {
 	checkNow := flag.Bool("check-now", false, "Run the Dropbox check immediately")
 	quickCheck := flag.Bool("quick", false, "Check only last 10 minutes of changes (for testing)")
 	lastHour := flag.Bool("last-hour", false, "Check only last hour of changes")
-	last24Hours := flag.Bool("last-24h", false, "Check changes in the last 24 hours")
-	dbConnStr := flag.String("db", "", "PostgreSQL connection string (optional, will use environment variables if not provided)")
 	flag.Parse()
 
 	fmt.Println("\nStarting Dropbox Monitor...")
 
-	// Initialize the monitor
-	if *dbConnStr == "" {
-		*dbConnStr = os.Getenv("DROPBOX_MONITOR_DB")
+	// Initialize database
+	dbPath := os.Getenv("DROPBOX_MONITOR_DB")
+	if dbPath == "" {
+		// Create data directory if it doesn't exist
+		if err := os.MkdirAll("data", 0755); err != nil {
+			log.Fatalf("Error creating data directory: %v", err)
+		}
+		dbPath = filepath.Join("data", "dropbox_monitor.db")
 	}
-	monitor, err := core.NewMonitor(*dbConnStr)
-	if err != nil {
-		log.Fatalf("Error initializing monitor: %v", err)
+	dropboxToken := os.Getenv("DROPBOX_ACCESS_TOKEN")
+	if dropboxToken == "" {
+		log.Fatal("DROPBOX_ACCESS_TOKEN environment variable is required")
 	}
-	defer monitor.Close()
 
-	log.Println("✅ Successfully connected to Dropbox and Database!")
+	manager, err := agents.NewAgentManager("file:"+dbPath, dropboxToken)
+	if err != nil {
+		log.Fatalf("Error initializing agent manager: %v", err)
+	}
 
 	if *checkNow {
 		// Run ad-hoc check
 		log.Println("Running ad-hoc Dropbox check...")
-		runCheck(monitor, *quickCheck, *lastHour, *last24Hours)
-	} else {
-		// Set up scheduler
-		c := cron.New()
-		_, err := c.AddFunc("@midnight", func() { runCheck(monitor, false, false, true) })
-		if err != nil {
-			log.Fatalf("Error setting up scheduler: %v", err)
+		timeWindow := "24h"
+		if *quickCheck {
+			timeWindow = "10m"
+		} else if *lastHour {
+			timeWindow = "1h"
 		}
 
-		// Start scheduler
-		c.Start()
-		log.Printf("Scheduler started. Will check Dropbox at midnight.")
-
-		// Keep the program running
-		select {}
-	}
-}
-
-func runCheck(monitor *core.Monitor, quickCheck bool, lastHour bool, last24Hours bool) {
-	var changes []string
-	var err error
-	var since time.Time
-	var period string
-
-	if quickCheck {
-		// Get changes from last 10 minutes
-		since = time.Now().Add(-10 * time.Minute)
-		period = "10min"
-		log.Printf("Checking for changes in the last 10 minutes (since %v)...", since.Format(time.RFC3339))
-		changes, err = monitor.DropboxClient.GetChangesLast10Minutes()
-	} else if lastHour {
-		// Get changes from last hour
-		since = time.Now().Add(-1 * time.Hour)
-		period = "hour"
-		log.Printf("Checking for changes in the last hour (since %v)...", since.Format(time.RFC3339))
-		changes, err = monitor.DropboxClient.GetChanges(since)
-	} else if last24Hours {
-		// Get changes from last 24 hours
-		since = time.Now().Add(-24 * time.Hour)
-		period = "day"
-		log.Printf("Checking for changes in the last 24 hours (since %v)...", since.Format(time.RFC3339))
-		changes, err = monitor.DropboxClient.GetChanges(since)
-	} else {
-		// Get changes from last 24 hours by default
-		since = time.Now().Add(-24 * time.Hour)
-		period = "day"
-		log.Printf("Checking for changes in the last 24 hours (since %v)...", since.Format(time.RFC3339))
-		changes, err = monitor.DropboxClient.GetChanges(since)
-	}
-
-	if err != nil {
-		log.Printf("Error getting changes: %v", err)
-		return
-	}
-
-	// Store changes in the database
-	for _, change := range changes {
-		err := monitor.DBAgent.StoreFileChange(change, time.Now(), nil)
+		ctx := context.Background()
+		report, err := manager.ProcessChanges(ctx, timeWindow)
 		if err != nil {
-			log.Printf("Error storing file change in database: %v", err)
+			log.Fatalf("Error processing changes: %v", err)
 		}
-	}
 
-	// Generate and send narrative report
-	if err := report.SendNarrativeReport(changes, period, since); err != nil {
-		log.Printf("Error sending narrative report: %v", err)
+		// Print report summary
+		fmt.Printf("\nReport Summary:\n")
+		fmt.Printf("Generated at: %v\n", report.GeneratedAt)
+		fmt.Printf("Total Files: %d\n", report.FileCount)
+		fmt.Printf("\nSummary:\n%s\n", report.Summary)
+		
+		if len(report.TopKeywords) > 0 {
+			fmt.Printf("\nTop Keywords:\n")
+			for kw, count := range report.TopKeywords {
+				fmt.Printf("- %s (%d)\n", kw, count)
+			}
+		}
+
+		if len(report.TopTopics) > 0 {
+			fmt.Printf("\nCommon Topics:\n")
+			for topic, count := range report.TopTopics {
+				fmt.Printf("- %s (%d)\n", topic, count)
+			}
+		}
 	} else {
-		log.Printf("✅ Narrative report sent successfully")
+		log.Fatal("Please specify --check-now to run an immediate check")
 	}
 }

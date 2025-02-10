@@ -3,19 +3,22 @@ package report
 import (
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/agents"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
 )
 
 // ActivityPattern represents a pattern of activity in the Dropbox
 type ActivityPattern struct {
-	MainDirectories []string // Most active directories
-	FileTypes       []string // Most changed file types
+	MainDirectories []string    // Most active directories
+	FileTypes       []string    // Most changed file types
 	BusyPeriods     []time.Time // Times with most activity
 	TotalChanges    int
+	FileContents    []agents.FileContent // Added field for file contents
 }
 
 // NarrativeReport generates a human-friendly narrative of Dropbox activity
@@ -45,6 +48,19 @@ func (r *NarrativeReport) analyzeActivity() {
 	dirCount := make(map[string]int)
 	extCount := make(map[string]int)
 
+	// Get content analyzer
+	contentAnalyzer := agents.NewContentAnalyzer(os.Getenv("DROPBOX_ACCESS_TOKEN"))
+	
+	// Analyze content of changed files
+	for _, change := range r.Changes {
+		content, err := contentAnalyzer.AnalyzeFile(change)
+		if err != nil {
+			log.Printf("Error analyzing file %s: %v", change, err)
+			continue
+		}
+		r.ActivityPattern.FileContents = append(r.ActivityPattern.FileContents, content)
+	}
+
 	for _, change := range r.Changes {
 		// Count directories
 		dir := filepath.Dir(change)
@@ -58,7 +74,7 @@ func (r *NarrativeReport) analyzeActivity() {
 		extCount[ext]++
 	}
 
-	// Get top directories
+	// Get top directories and file types
 	r.ActivityPattern.MainDirectories = getTopKeys(dirCount, 3)
 	r.ActivityPattern.FileTypes = getTopKeys(extCount, 3)
 	r.ActivityPattern.TotalChanges = len(r.Changes)
@@ -189,6 +205,22 @@ func (r *NarrativeReport) generateAnalysis() string {
 		for _, ext := range r.ActivityPattern.FileTypes {
 			sb.WriteString(fmt.Sprintf("- %s files\n", strings.TrimPrefix(ext, ".")))
 		}
+		sb.WriteString("\n")
+	}
+
+	// Content analysis
+	if len(r.ActivityPattern.FileContents) > 0 {
+		sb.WriteString("📄 Content Changes:\n")
+		for _, content := range r.ActivityPattern.FileContents {
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", filepath.Base(content.Path), content.Summary))
+			if len(content.Keywords) > 0 {
+				sb.WriteString(fmt.Sprintf("  Keywords: %s\n", strings.Join(content.Keywords, ", ")))
+			}
+			if len(content.Topics) > 0 && content.Topics[0] != "general" {
+				sb.WriteString(fmt.Sprintf("  Topics: %s\n", strings.Join(content.Topics, ", ")))
+			}
+			sb.WriteString("\n")
+		}
 	}
 
 	return sb.String()
@@ -210,15 +242,28 @@ func (r *NarrativeReport) generateInsights() string {
 		}
 	}
 
-	if len(r.ActivityPattern.FileTypes) > 0 {
-		ext := r.ActivityPattern.FileTypes[0]
-		switch {
-		case strings.Contains(ext, "doc") || strings.Contains(ext, "pdf"):
-			sb.WriteString("📝 There's significant document activity. Consider organizing these into appropriate folders.\n")
-		case strings.Contains(ext, "jpg") || strings.Contains(ext, "png"):
-			sb.WriteString("🖼️ Lots of image changes. You might want to check if these need to be organized or archived.\n")
-		case strings.Contains(ext, "git") || strings.Contains(ext, "py") || strings.Contains(ext, "js"):
-			sb.WriteString("💻 Active code development detected. Remember to keep your backups current.\n")
+	// Content-based insights
+	if len(r.ActivityPattern.FileContents) > 0 {
+		var documentCount, codeCount, dataCount int
+		for _, content := range r.ActivityPattern.FileContents {
+			switch content.ContentType {
+			case "document":
+				documentCount++
+			case "code":
+				codeCount++
+			case "data":
+				dataCount++
+			}
+		}
+
+		if documentCount > 0 {
+			sb.WriteString(fmt.Sprintf("📚 %d document(s) were modified, suggesting active documentation work.\n", documentCount))
+		}
+		if codeCount > 0 {
+			sb.WriteString(fmt.Sprintf("💻 %d code file(s) were changed, indicating development activity.\n", codeCount))
+		}
+		if dataCount > 0 {
+			sb.WriteString(fmt.Sprintf("📊 %d data file(s) were updated, suggesting data analysis or configuration changes.\n", dataCount))
 		}
 	}
 

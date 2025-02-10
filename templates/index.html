@@ -2,11 +2,125 @@
 <html>
 <head>
     <title>{{ .title }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .controls {
+            margin-bottom: 20px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        select, button {
+            padding: 8px 12px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #output {
+            white-space: pre-wrap;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #fff;
+            min-height: 200px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
 </head>
 <body>
-    <h1>Dropbox Monitor</h1>
-    <a href="/list-folders">List Folders</a><br>
-    <a href="/last-changed">Last Changed Dates</a><br>
-    <a href="/changes-last-24-hours">Changes in Last 24 Hours</a>
+    <div class="container">
+        <h1>Dropbox Monitor</h1>
+        
+        <div class="controls">
+            <div>
+                <label for="timeWindow">Time Window:</label>
+                <select id="timeWindow">
+                    <option value="10min">Last 10 minutes</option>
+                    <option value="1hour">Last hour</option>
+                    <option value="24hours" selected>Last 24 hours</option>
+                </select>
+            </div>
+            
+            <div>
+                <button onclick="checkChanges(false)">Check Now</button>
+                <button onclick="checkChanges(true)">Check and Send Email</button>
+            </div>
+        </div>
+
+        <div id="status" class="status"></div>
+        <div id="output">Welcome to Dropbox Monitor!
+Click 'Check Now' to check for file changes.</div>
+    </div>
+
+    <script>
+        async function checkChanges(sendEmail) {
+            const timeWindow = document.getElementById('timeWindow').value;
+            const status = document.getElementById('status');
+            const output = document.getElementById('output');
+            
+            status.className = 'status';
+            status.textContent = 'Checking for changes...';
+            
+            try {
+                const response = await fetch(`/api/changes?window=${timeWindow}&email=${sendEmail}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    const changes = data.changes || [];
+                    status.className = 'status success';
+                    if (changes.length === 0) {
+                        status.textContent = 'No changes found in the selected time window';
+                        output.textContent = 'No changes to report.';
+                    } else {
+                        status.textContent = `Found ${changes.length} changes${sendEmail ? ' and sent email report' : ''}`;
+                        output.textContent = data.message || 'No details available.';
+                    }
+                } else {
+                    status.className = 'status error';
+                    status.textContent = data.message || 'An error occurred';
+                    output.textContent = 'Unable to fetch changes. Please try again.';
+                }
+            } catch (error) {
+                status.className = 'status error';
+                status.textContent = `Error: ${error.message}`;
+                output.textContent = 'Unable to connect to the server. Please check your connection and try again.';
+            }
+        }
+    </script>
 </body>
 </html>

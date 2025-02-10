@@ -1,11 +1,27 @@
 # SwarmGo Dropbox Monitor
 
-SwarmGo Dropbox Monitor is a Go application designed to monitor and interact with Dropbox. It establishes a connection to Dropbox and starts a scheduler for periodic tasks.
+SwarmGo Dropbox Monitor is a Go application designed to monitor changes in your Dropbox account using an agent-based architecture. It tracks file modifications, additions, and updates, storing the metadata in a local database and sending periodic reports via email.
 
 ## Features
 
-- **Dropbox Authentication**: Tests the connection to Dropbox to ensure authentication is successful.
-- **Scheduler**: Starts a scheduler to manage periodic tasks.
+- **Agent-Based Architecture**: Uses swarmgo for efficient agent coordination
+  - FileChangeAgent: Identifies Dropbox file changes
+  - DatabaseAgent: Stores changes in PostgreSQL
+  - ContentAnalyzerAgent: Analyzes file contents
+  - ReportingAgent: Generates reports
+- **Real-time Dropbox Monitoring**: Tracks file changes, modifications, and updates in your Dropbox account
+- **Metadata Storage**: Stores file metadata in a SQLite database for efficient querying and tracking
+- **Change Detection**: Uses Dropbox's content hash to accurately detect file changes
+- **Flexible Reporting**: Generate reports for different time windows:
+  - Last 10 minutes (quick check)
+  - Last hour
+  - Last 24 hours
+- **Email Notifications**: Sends formatted email reports about file changes
+- **Retry Mechanism**: Implements exponential backoff for reliable API communication
+- **Multiple Interfaces**:
+  - CLI for command-line operations
+  - Web interface for visual monitoring
+  - GUI application for desktop usage
 
 ## Installation
 
@@ -16,53 +32,113 @@ SwarmGo Dropbox Monitor is a Go application designed to monitor and interact wit
     ```
 
 2. **Install dependencies**:
-    Ensure you have Go installed. Then, install the required packages:
     ```bash
     go mod tidy
     ```
 
-3. **Using the .env File for Environment Variables**
-   
-Create a .env file in the root directory of your project with the following content:
+3. **Configure Environment Variables**:
+   Create a `.env` file in the root directory with the following content:
+   ```env
+   # Dropbox Configuration
+   DROPBOX_ACCESS_TOKEN=your_dropbox_api_token
 
+   # SMTP Configuration
+   SMTP_SERVER=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USERNAME=your.email@gmail.com
+   SMTP_PASSWORD=your_app_password
+   FROM_EMAIL=your.email@gmail.com
+   TO_EMAILS=recipient1@example.com,recipient2@example.com
 
-``` env
-# Dropbox API token
-DROPBOX_ACCESS_TOKEN=your_dropbox_api_token
+   # Scheduler Configuration
+   SCHEDULER_INTERVAL=15
 
-# SMTP Configuration
-SMTP_SERVER=smtp.yourserver.com
-SMTP_PORT=587
-SMTP_USER=your_smtp_user
-SMTP_PASS=your_smtp_password
-NOTIFY_EMAIL=your_email@example.com
-```
-4. **Install the godotenv package** if you haven't already:
-
-```bash
-go get github.com/joho/godotenv
-```
-
-5 **Ensure your Go files are set up** to load the .env file.
-
-This is already done in the provided code.
+   # Logging
+   LOG_LEVEL=INFO
+   ```
 
 ## Usage
 
-1. **Run the application**:
-    ```bash
-    go run main.go
-    ```
+### CLI Interface
 
-    The application will:
-    - Test the connection to Dropbox.
-    - Start the scheduler.
-    - Keep running to monitor Dropbox.
+1. **Quick check (last 10 minutes)**:
+   ```bash
+   go run cmd/cli/main.go --check-now --quick
+   ```
+
+2. **Check last hour**:
+   ```bash
+   go run cmd/cli/main.go --check-now --last-hour
+   ```
+
+3. **Check last 24 hours**:
+   ```bash
+   go run cmd/cli/main.go --check-now --last-24h
+   ```
+
+4. **Run as a service** (checks daily at midnight):
+   ```bash
+   go run cmd/cli/main.go
+   ```
+
+### Web Interface
+```bash
+go run cmd/web/main.go
+```
+Access the web interface at `http://localhost:8080`
+
+### GUI Application
+```bash
+go run cmd/gui/main.go
+```
+
+## Email Configuration
+
+The application uses SMTP to send email reports. For Gmail:
+1. Enable 2-Factor Authentication
+2. Generate an App Password
+3. Use the App Password in your `.env` file
+
+## Building from Source
+
+Build all binaries:
+```bash
+go build ./...
+```
+
+Build specific interfaces:
+```bash
+go build -o dropbox-monitor cmd/cli/main.go    # CLI
+go build -o dropbox-web cmd/web/main.go        # Web
+go build -o dropbox-gui cmd/gui/main.go        # GUI
+```
+
+## Testing
+
+The application includes a comprehensive test suite:
+
+- **Unit Tests**: Test individual components and functions
+- **Integration Tests**: Test interactions between components
+- **Mock Tests**: Use mock HTTP client for Dropbox API testing
+- **Agent Tests**: Test agent coordination and communication
+
+Run the tests:
+```bash
+go test ./...
+```
+
+## Development
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for technical details about the codebase organization and implementation details.
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes.
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

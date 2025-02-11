@@ -19,6 +19,14 @@ const (
 	SQLite DBType = iota
 )
 
+// Store defines the interface for database operations
+type Store interface {
+	SaveFileChange(ctx context.Context, fc *FileChange) error
+	SaveFileContent(ctx context.Context, fc *FileContent) error
+	GetRecentFileChanges(ctx context.Context, since time.Time) ([]FileChange, error)
+	Close() error
+}
+
 type DB struct {
 	DB     *sql.DB // Expose the underlying connection
 	DBType DBType

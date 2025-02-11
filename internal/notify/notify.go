@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log"
@@ -10,50 +11,40 @@ import (
 	"strings"
 )
 
-// Notifier handles email notifications
-type Notifier struct {
+// Notifier defines the interface for sending notifications
+type Notifier interface {
+	Send(ctx context.Context, subject, message string) error
+}
+
+// EmailNotifier handles email notifications
+type EmailNotifier struct {
 	smtpServer   string
 	smtpPort     string
 	smtpUsername string
 	smtpPassword string
 	fromEmail    string
 	toEmails     []string
+	skipTLS      bool // for testing purposes
 }
 
-// NewNotifier creates a new Notifier instance
-func NewNotifier() *Notifier {
-	// Try to load .env from different locations
-	envPaths := []string{
-		".env",
-		"../.env",
-		"../../.env",
-		"/Users/christiaanpauw/go/src/github.com/christiaanpauw/swarmgo_dropbox_monitor/.env",
-	}
-
-	var loaded bool
-	for _, path := range envPaths {
-		if err := loadEnvFile(path); err == nil {
-			loaded = true
-			break
-		}
-	}
-
-	if !loaded {
-		log.Println("Warning: Could not load .env file")
-	}
-
-	// Get email configuration from environment
-	n := &Notifier{
+// NewNotifier creates a new EmailNotifier instance
+func NewNotifier() *EmailNotifier {
+	n := &EmailNotifier{
 		smtpServer:   os.Getenv("SMTP_SERVER"),
 		smtpPort:     os.Getenv("SMTP_PORT"),
 		smtpUsername: os.Getenv("SMTP_USERNAME"),
 		smtpPassword: os.Getenv("SMTP_PASSWORD"),
 		fromEmail:    os.Getenv("FROM_EMAIL"),
+		skipTLS:      os.Getenv("SKIP_TLS") == "true",
 	}
 
 	// Get recipient emails
 	if toEmails := os.Getenv("TO_EMAILS"); toEmails != "" {
 		n.toEmails = strings.Split(toEmails, ",")
+		// Trim spaces from email addresses
+		for i, email := range n.toEmails {
+			n.toEmails[i] = strings.TrimSpace(email)
+		}
 	}
 
 	return n
@@ -86,8 +77,84 @@ func loadEnvFile(filename string) error {
 	return scanner.Err()
 }
 
+// Send implements the Notifier interface
+func (n *EmailNotifier) Send(ctx context.Context, subject, message string) error {
+	if len(n.toEmails) == 0 {
+		return fmt.Errorf("no recipients specified")
+	}
+
+	auth := smtp.PlainAuth("", n.smtpUsername, n.smtpPassword, n.smtpServer)
+	addr := fmt.Sprintf("%s:%s", n.smtpServer, n.smtpPort)
+
+	if n.skipTLS {
+		return smtp.SendMail(addr, auth, n.fromEmail, n.toEmails, []byte(fmt.Sprintf("Subject: %s\r\n\r\n%s", subject, message)))
+	}
+
+	// Create TLS config
+	tlsconfig := &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         n.smtpServer,
+	}
+
+	// Here is the key difference, connect to the SMTP Server with TLS
+	conn, err := tls.Dial("tcp", addr, tlsconfig)
+	if err != nil {
+		log.Printf("Error connecting to SMTP server: %v", err)
+		return err
+	}
+	defer conn.Close()
+
+	c, err := smtp.NewClient(conn, n.smtpServer)
+	if err != nil {
+		log.Printf("Error creating SMTP client: %v", err)
+		return err
+	}
+	defer c.Close()
+
+	// Auth
+	if err = c.Auth(auth); err != nil {
+		log.Printf("Error authenticating: %v", err)
+		return err
+	}
+
+	// Set the sender and recipient
+	if err = c.Mail(n.fromEmail); err != nil {
+		log.Printf("Error setting sender: %v", err)
+		return err
+	}
+
+	for _, addr := range n.toEmails {
+		if err = c.Rcpt(addr); err != nil {
+			log.Printf("Error setting recipient: %v", err)
+			return err
+		}
+	}
+
+	// Send the email body
+	w, err := c.Data()
+	if err != nil {
+		log.Printf("Error creating data writer: %v", err)
+		return err
+	}
+
+	msg := fmt.Sprintf("Subject: %s\r\n\r\n%s", subject, message)
+	_, err = w.Write([]byte(msg))
+	if err != nil {
+		log.Printf("Error writing message: %v", err)
+		return err
+	}
+
+	err = w.Close()
+	if err != nil {
+		log.Printf("Error closing data writer: %v", err)
+		return err
+	}
+
+	return c.Quit()
+}
+
 // SendEmail sends an email notification
-func (n *Notifier) SendEmail(recipients []string, subject, body string) error {
+func (n *EmailNotifier) SendEmail(recipients []string, subject, body string) error {
 	if len(recipients) == 0 {
 		if len(n.toEmails) == 0 {
 			return fmt.Errorf("no recipients specified")

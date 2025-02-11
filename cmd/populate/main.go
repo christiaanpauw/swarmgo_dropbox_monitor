@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"os"
@@ -22,6 +23,19 @@ func main() {
 		log.Fatal("DROPBOX_ACCESS_TOKEN not set in .env")
 	}
 
+	// Create Dropbox client
+	client, err := dropbox.NewDropboxClient(token)
+	if err != nil {
+		log.Fatalf("Error creating Dropbox client: %v", err)
+	}
+
+	// List first 10 files from root directory
+	log.Println("Listing first 10 files from Dropbox...")
+	files, err := client.ListFolder(context.Background(), "")
+	if err != nil {
+		log.Fatalf("Error listing files: %v", err)
+	}
+
 	// Open database connection
 	db, err := sql.Open("sqlite3", "data/dropbox_monitor.db")
 	if err != nil {
@@ -29,16 +43,37 @@ func main() {
 	}
 	defer db.Close()
 
-	// Create Dropbox client
-	client, err := dropbox.NewDropboxClient(token, db)
+	// Create table if it doesn't exist
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS files (
+			path TEXT PRIMARY KEY,
+			name TEXT,
+			size INTEGER,
+			modified DATETIME,
+			is_deleted BOOLEAN
+		)
+	`)
 	if err != nil {
-		log.Fatalf("Error creating Dropbox client: %v", err)
+		log.Fatalf("Error creating table: %v", err)
 	}
 
-	// Populate first 10 files
-	log.Println("Populating first 10 files from Dropbox...")
-	if err := client.PopulateFirstNFiles(10); err != nil {
-		log.Fatalf("Error populating files: %v", err)
+	// Insert first 10 files into database
+	count := 0
+	for _, file := range files {
+		if count >= 10 {
+			break
+		}
+
+		_, err := db.Exec(`
+			INSERT OR REPLACE INTO files (path, name, size, modified, is_deleted)
+			VALUES (?, ?, ?, ?, ?)
+		`, file.Path, file.Name, file.Size, file.Modified, file.IsDeleted)
+		if err != nil {
+			log.Printf("Error inserting file %s: %v", file.Path, err)
+			continue
+		}
+		count++
 	}
-	log.Println("Successfully populated 10 files from Dropbox")
+
+	log.Printf("Successfully populated %d files from Dropbox", count)
 }

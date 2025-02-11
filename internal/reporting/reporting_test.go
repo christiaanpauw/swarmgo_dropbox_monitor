@@ -1,120 +1,210 @@
 package reporting
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/db"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestGenerateReport(t *testing.T) {
-	baseTime := time.Date(2025, 2, 10, 9, 21, 16, 0, time.UTC)
+// mockNotifier implements notify.Notifier for testing
+type mockNotifier struct {
+	lastSubject string
+	lastMessage string
+	shouldError bool
+}
 
-	testCases := []struct {
-		name  string
-		files []db.FileChange
+func (m *mockNotifier) Send(ctx context.Context, subject, message string) error {
+	if m.shouldError {
+		return assert.AnError
+	}
+	m.lastSubject = subject
+	m.lastMessage = message
+	return nil
+}
+
+func TestGenerateReport(t *testing.T) {
+	tests := []struct {
+		name    string
+		changes []models.FileMetadata
+		want    *models.Report
+		wantErr bool
 	}{
 		{
-			name: "ten_files",
-			files: []db.FileChange{
+			name:    "Empty changes",
+			changes: []models.FileMetadata{},
+			want: &models.Report{
+				Changes:     []models.FileChange{},
+				GeneratedAt: time.Now(),
+			},
+			wantErr: false,
+		},
+		{
+			name: "Single change",
+			changes: []models.FileMetadata{
 				{
-					FilePath:       "/project1/docs/spec.md",
-					ModifiedAt:     baseTime,
-					FileType:       "md",
-					Portfolio:      "Project1",
-					Project:        "Documentation",
-					ModifiedByName: "John Smith",
-					Size:          1024,
-				},
-				{
-					FilePath:       "/project1/src/main.go",
-					ModifiedAt:     baseTime.Add(-1 * time.Hour),
-					FileType:       "go",
-					Portfolio:      "Project1",
-					Project:        "Backend",
-					ModifiedByName: "Jane Doe",
-					Size:          2048,
-				},
-				{
-					FilePath:       "/project2/ui/index.html",
-					ModifiedAt:     baseTime.Add(-2 * time.Hour),
-					FileType:       "html",
-					Portfolio:      "Project2",
-					Project:        "Frontend",
-					ModifiedByName: "Alice Johnson",
-					Size:          512,
-				},
-				{
-					FilePath:       "/project2/ui/styles.css",
-					ModifiedAt:     baseTime.Add(-3 * time.Hour),
-					FileType:       "css",
-					Portfolio:      "Project2",
-					Project:        "Frontend",
-					ModifiedByName: "Bob Wilson",
-					Size:          256,
-				},
-				{
-					FilePath:       "/project1/tests/main_test.go",
-					ModifiedAt:     baseTime.Add(-4 * time.Hour),
-					FileType:       "go",
-					Portfolio:      "Project1",
-					Project:        "Testing",
-					ModifiedByName: "John Smith",
-					Size:          1536,
-				},
-				{
-					FilePath:       "/project2/docs/api.yaml",
-					ModifiedAt:     baseTime.Add(-5 * time.Hour),
-					FileType:       "yaml",
-					Portfolio:      "Project2",
-					Project:        "Documentation",
-					LockHolderName: "Charlie Brown",
-					Size:          768,
-				},
-				{
-					FilePath:       "/project1/config/settings.json",
-					ModifiedAt:     baseTime.Add(-6 * time.Hour),
-					FileType:       "json",
-					Portfolio:      "Project1",
-					Project:        "Configuration",
-					ModifiedByName: "Jane Doe",
-					Size:          384,
-				},
-				{
-					FilePath:       "/project2/src/utils.py",
-					ModifiedAt:     baseTime.Add(-7 * time.Hour),
-					FileType:       "py",
-					Portfolio:      "Project2",
-					Project:        "Backend",
-					ModifiedByName: "Alice Johnson",
-					Size:          896,
-				},
-				{
-					FilePath:       "/project1/assets/logo.png",
-					ModifiedAt:     baseTime.Add(-8 * time.Hour),
-					FileType:       "png",
-					Portfolio:      "Project1",
-					Project:        "Assets",
-					ModifiedByName: "Bob Wilson",
-					Size:          4096,
-				},
-				{
-					FilePath:       "/project2/README.md",
-					ModifiedAt:     baseTime.Add(-9 * time.Hour),
-					FileType:       "md",
-					Portfolio:      "Project2",
-					Project:        "Documentation",
-					ModifiedByName: "Charlie Brown",
-					Size:          128,
+					Path:     "/test/file.txt",
+					Modified: time.Now(),
 				},
 			},
+			want: &models.Report{
+				Changes: []models.FileChange{
+					{
+						Path:      "/test/file.txt",
+						Extension: "txt",
+						Directory: "/test",
+					},
+				},
+				ExtensionCount: map[string]int{"txt": 1},
+				DirectoryCount: map[string]int{"/test": 1},
+				TotalChanges:   1,
+			},
+			wantErr: false,
 		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			report := GenerateReport(tc.files)
-			t.Logf("Generated Report:\n%s", report)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewReporter(&mockNotifier{})
+			got, err := r.GenerateReport(context.Background(), tt.changes)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, got)
+
+			// Compare everything except GeneratedAt
+			assert.Equal(t, len(tt.want.Changes), len(got.Changes))
+			if len(tt.want.Changes) > 0 {
+				assert.Equal(t, tt.want.Changes[0].Path, got.Changes[0].Path)
+				assert.Equal(t, tt.want.Changes[0].Extension, got.Changes[0].Extension)
+				assert.Equal(t, tt.want.Changes[0].Directory, got.Changes[0].Directory)
+			}
+			assert.Equal(t, tt.want.ExtensionCount, got.ExtensionCount)
+			assert.Equal(t, tt.want.DirectoryCount, got.DirectoryCount)
+			assert.Equal(t, tt.want.TotalChanges, got.TotalChanges)
 		})
 	}
+}
+
+func TestGenerateHTML(t *testing.T) {
+	report := &models.Report{
+		Changes: []models.FileChange{
+			{
+				Path:      "/test/file.txt",
+				Extension: "txt",
+				Directory: "/test",
+			},
+		},
+		ExtensionCount: map[string]int{"txt": 1},
+		DirectoryCount: map[string]int{"/test": 1},
+		GeneratedAt:    time.Now(),
+		TotalChanges:   1,
+	}
+
+	r := NewReporter(&mockNotifier{})
+	html, err := r.GenerateHTML(context.Background(), report)
+	require.NoError(t, err)
+	require.NotEmpty(t, html)
+
+	// Check for expected HTML elements
+	assert.Contains(t, html, "<html>")
+	assert.Contains(t, html, "</html>")
+	assert.Contains(t, html, "Dropbox Changes Report")
+	assert.Contains(t, html, "/test/file.txt")
+	assert.Contains(t, html, "txt: 1 files")
+	assert.Contains(t, html, "/test: 1 files")
+}
+
+func TestSendReport(t *testing.T) {
+	tests := []struct {
+		name        string
+		notifier    *mockNotifier
+		wantErr     bool
+		wantSubject string
+	}{
+		{
+			name:        "Successful send",
+			notifier:    &mockNotifier{},
+			wantErr:     false,
+			wantSubject: "Dropbox Changes Report",
+		},
+		{
+			name:        "Send error",
+			notifier:    &mockNotifier{shouldError: true},
+			wantErr:     true,
+			wantSubject: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewReporter(tt.notifier)
+			report := &models.Report{
+				Changes:     []models.FileChange{},
+				GeneratedAt: time.Now(),
+			}
+
+			err := r.SendReport(context.Background(), report)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSubject, tt.notifier.lastSubject)
+			assert.NotEmpty(t, tt.notifier.lastMessage)
+		})
+	}
+}
+
+func TestNarrativeReporter(t *testing.T) {
+	report := &models.Report{
+		Changes: []models.FileChange{
+			{
+				Path:      "/test/file1.txt",
+				Extension: "txt",
+				Directory: "/test",
+			},
+			{
+				Path:      "/test/file2.txt",
+				Extension: "txt",
+				Directory: "/test",
+			},
+			{
+				Path:      "/other/file.doc",
+				Extension: "doc",
+				Directory: "/other",
+			},
+		},
+		ExtensionCount: map[string]int{"txt": 2, "doc": 1},
+		DirectoryCount: map[string]int{"/test": 2, "/other": 1},
+		GeneratedAt:    time.Now(),
+		TotalChanges:   3,
+	}
+
+	r := NewNarrativeReporter(&mockNotifier{})
+
+	// Test AnalyzeActivity
+	pattern, err := r.AnalyzeActivity(context.Background(), report)
+	require.NoError(t, err)
+	require.NotNil(t, pattern)
+	assert.Equal(t, 3, pattern.TotalChanges)
+	assert.Contains(t, pattern.MainDirectories, "/test")
+	assert.Contains(t, pattern.FileTypes, "txt")
+
+	// Test GenerateNarrative
+	narrative, err := r.GenerateNarrative(context.Background(), report, pattern)
+	require.NoError(t, err)
+	require.NotEmpty(t, narrative)
+
+	// Check narrative content
+	assert.True(t, strings.Contains(narrative, "Activity Report"))
+	assert.True(t, strings.Contains(narrative, "Total Changes: 3"))
+	assert.True(t, strings.Contains(narrative, "/test"))
+	assert.True(t, strings.Contains(narrative, "txt files"))
 }

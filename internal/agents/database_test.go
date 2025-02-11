@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,15 +11,37 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDatabaseAgent_StoreFileContent(t *testing.T) {
+func setupTestDB(t *testing.T) (DatabaseAgent, string, func()) {
 	// Create a temporary directory for the test database
 	tempDir, err := os.MkdirTemp("", "dropbox_monitor_test")
 	assert.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+
+	// Set environment variable for database path
+	dbPath := filepath.Join(tempDir, "test.db")
+	oldDBPath := os.Getenv("DROPBOX_MONITOR_DB")
+	os.Setenv("DROPBOX_MONITOR_DB", dbPath)
 
 	// Initialize database agent
 	agent, err := NewDatabaseAgent()
 	assert.NoError(t, err)
+
+	// Return cleanup function
+	cleanup := func() {
+		agent.Close()
+		os.RemoveAll(tempDir)
+		if oldDBPath != "" {
+			os.Setenv("DROPBOX_MONITOR_DB", oldDBPath)
+		} else {
+			os.Unsetenv("DROPBOX_MONITOR_DB")
+		}
+	}
+
+	return agent, tempDir, cleanup
+}
+
+func TestDatabaseAgent_StoreFileContent(t *testing.T) {
+	agent, _, cleanup := setupTestDB(t)
+	defer cleanup()
 
 	// Test storing file content
 	content := &models.FileContent{
@@ -29,19 +52,13 @@ func TestDatabaseAgent_StoreFileContent(t *testing.T) {
 		IsBinary:    false,
 	}
 
-	err = agent.StoreFileContent(context.Background(), content)
+	err := agent.StoreFileContent(context.Background(), content)
 	assert.NoError(t, err)
 }
 
 func TestDatabaseAgent_GetRecentChanges(t *testing.T) {
-	// Create a temporary directory for the test database
-	tempDir, err := os.MkdirTemp("", "dropbox_monitor_test")
-	assert.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	// Initialize database agent
-	agent, err := NewDatabaseAgent()
-	assert.NoError(t, err)
+	agent, _, cleanup := setupTestDB(t)
+	defer cleanup()
 
 	// Store an old file that shouldn't be included in recent changes
 	content3 := &models.FileContent{
@@ -51,7 +68,7 @@ func TestDatabaseAgent_GetRecentChanges(t *testing.T) {
 		ContentHash: "ghi789_v1", 
 		IsBinary:    false,
 	}
-	err = agent.StoreFileContent(context.Background(), content3)
+	err := agent.StoreFileContent(context.Background(), content3)
 	assert.NoError(t, err)
 
 	// Sleep to ensure time difference

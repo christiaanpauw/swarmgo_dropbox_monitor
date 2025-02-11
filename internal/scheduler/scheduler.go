@@ -1,70 +1,66 @@
 package scheduler
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"time"
+
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/dropbox"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/report"
-	"database/sql"
+	"github.com/robfig/cron/v3"
 )
 
 type Scheduler struct {
-	client *dropbox.DropboxClient
-	db     *sql.DB
+	client   *dropbox.DropboxClient
+	notifier notify.Notifier
+	cron     *cron.Cron
 }
 
 // NewScheduler creates a new scheduler instance
-func NewScheduler(client *dropbox.DropboxClient, db *sql.DB) *Scheduler {
+func NewScheduler(client *dropbox.DropboxClient, notifier notify.Notifier) *Scheduler {
 	return &Scheduler{
-		client: client,
-		db:     db,
+		client:   client,
+		notifier: notifier,
+		cron:     cron.New(),
 	}
 }
 
-// Start initializes the daily scheduler
+// Start begins the scheduled tasks
 func (s *Scheduler) Start() error {
-	go func() {
-		for {
-			now := time.Now()
-			nextRun := now.Truncate(24 * time.Hour).Add(24 * time.Hour) // Midnight next day
-			waitTime := nextRun.Sub(now)
-
-			log.Printf("Next check scheduled in %v", waitTime)
-			time.Sleep(waitTime) // Wait until the next day
-
-			log.Println("Checking Dropbox for changes...")
-
-			// Step 1: Check Dropbox
-			changes, err := s.client.GetChangesLast24Hours()
-			if err != nil {
-				log.Printf("Error checking Dropbox: %v", err)
-				continue
-			}
-
-			// Step 2: Generate report
-			var changeStrings []string
-			for _, change := range changes {
-				changeStrings = append(changeStrings, fmt.Sprintf("%s (modified at %s)", change.PathLower, change.ServerModified))
-			}
-
-			reportData := report.Generate(changeStrings)
-
-			// Step 3: Send notification (using email)
-			err = s.sendEmailReport(reportData)
-			if err != nil {
-				log.Printf("Error sending notification: %v", err)
-			} else {
-				log.Println("Report sent successfully!")
-			}
+	// Schedule daily check at midnight
+	_, err := s.cron.AddFunc("@midnight", func() {
+		ctx := context.Background()
+		changes, err := s.client.GetChangesLast24Hours(ctx)
+		if err != nil {
+			log.Printf("Error getting changes: %v", err)
+			return
 		}
-	}()
 
+		// Convert changes to strings
+		var changeStrings []string
+		for _, change := range changes {
+			changeStrings = append(changeStrings, fmt.Sprintf("%s (modified at %s)", change.PathLower, change.ServerModified))
+		}
+
+		// Generate and send report
+		reportData := report.Generate(changeStrings)
+		if err := reportData.SendReport(); err != nil {
+			log.Printf("Error sending email report: %v", err)
+		}
+	})
+
+	if err != nil {
+		return fmt.Errorf("error adding cron job: %v", err)
+	}
+
+	s.cron.Start()
 	return nil
 }
 
-// sendEmailReport sends the report via email
-func (s *Scheduler) sendEmailReport(reportData *report.Report) error {
-	// Send the email using the report package's SendReport method
-	return reportData.SendReport()
+// Stop stops the scheduler
+func (s *Scheduler) Stop() {
+	if s.cron != nil {
+		s.cron.Stop()
+	}
 }

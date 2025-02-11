@@ -1,106 +1,86 @@
 package agents
 
 import (
-	"errors"
+	"context"
 	"testing"
 	"time"
 
-	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox/files"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/dropbox"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
-// Mock Dropbox client
+// mockDropboxClient is a mock implementation of the Dropbox client
 type mockDropboxClient struct {
-	entries []files.IsMetadata
-	hasMore bool
-	cursor  string
-	err     error
+	mock.Mock
+	dropbox.Client
 }
 
-func (m *mockDropboxClient) ListFolder(arg *files.ListFolderArg) (res *files.ListFolderResult, err error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return &files.ListFolderResult{
-		Entries:  m.entries,
-		HasMore:  m.hasMore,
-		Cursor:   m.cursor,
-	}, nil
+func (m *mockDropboxClient) ListFolder(ctx context.Context, path string) ([]*models.FileMetadata, error) {
+	args := m.Called(ctx, path)
+	return args.Get(0).([]*models.FileMetadata), args.Error(1)
 }
 
-func (m *mockDropboxClient) ListFolderContinue(arg *files.ListFolderContinueArg) (res *files.ListFolderResult, err error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return &files.ListFolderResult{
-		Entries:  m.entries,
-		HasMore:  false,
-		Cursor:   "",
-	}, nil
+func (m *mockDropboxClient) GetFileContent(ctx context.Context, path string) ([]byte, error) {
+	args := m.Called(ctx, path)
+	return args.Get(0).([]byte), args.Error(1)
 }
 
-func TestFileChangeAgent_Execute(t *testing.T) {
-	// Create test data
+func (m *mockDropboxClient) GetChangesLast24Hours(ctx context.Context) ([]*models.FileMetadata, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]*models.FileMetadata), args.Error(1)
+}
+
+func (m *mockDropboxClient) GetChangesLast10Minutes(ctx context.Context) ([]*models.FileMetadata, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]*models.FileMetadata), args.Error(1)
+}
+
+func (m *mockDropboxClient) GetChanges(ctx context.Context) ([]*models.FileMetadata, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]*models.FileMetadata), args.Error(1)
+}
+
+func TestFileChangeAgent_DetectChanges(t *testing.T) {
 	now := time.Now()
 	oldTime := now.Add(-24 * time.Hour)
-	
+
 	testCases := []struct {
-		name      string
-		entries   []files.IsMetadata
-		hasMore   bool
-		cursor    string
-		err       error
-		timeWindow string
-		wantErr   bool
-		wantCount int
+		name       string
+		files      []*models.FileMetadata
+		err        error
+		wantErr    bool
+		wantCount  int
 	}{
 		{
 			name: "Recent changes found",
-			entries: []files.IsMetadata{
-				&files.FileMetadata{
-					Metadata: files.Metadata{
-						Name:        "test1.txt",
-						PathDisplay: "/test1.txt",
-					},
-					ServerModified: now,
-					Id:            "id1",
+			files: []*models.FileMetadata{
+				{
+					Path:           "/test1.txt",
+					Name:          "test1.txt",
 					Size:          100,
-					ContentHash:   "hash1",
+					Modified:      now,
+					PathLower:     "/test1.txt",
+					ServerModified: now,
 				},
-				&files.FileMetadata{
-					Metadata: files.Metadata{
-						Name:        "test2.txt",
-						PathDisplay: "/test2.txt",
-					},
-					ServerModified: oldTime,
-					Id:            "id2",
+				{
+					Path:           "/test2.txt",
+					Name:          "test2.txt",
 					Size:          200,
-					ContentHash:   "hash2",
+					Modified:      oldTime,
+					PathLower:     "/test2.txt",
+					ServerModified: oldTime,
 				},
 			},
-			hasMore:    false,
-			cursor:     "",
 			err:        nil,
-			timeWindow: "12h",
 			wantErr:    false,
-			wantCount:  1,
-		},
-		{
-			name:       "Invalid time window",
-			entries:    nil,
-			hasMore:    false,
-			cursor:     "",
-			err:        nil,
-			timeWindow: "invalid",
-			wantErr:    true,
-			wantCount:  0,
+			wantCount:  2,
 		},
 		{
 			name:       "Dropbox error",
-			entries:    nil,
-			hasMore:    false,
-			cursor:     "",
-			err:        errors.New("dropbox error"),
-			timeWindow: "12h",
+			files:      nil,
+			err:        &DropboxError{Message: "API error"},
 			wantErr:    true,
 			wantCount:  0,
 		},
@@ -108,132 +88,42 @@ func TestFileChangeAgent_Execute(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			// Create mock client
+			mockClient := &mockDropboxClient{}
+
+			// Set up mock expectations
+			mockClient.On("ListFolder", mock.Anything, "").Return(tc.files, tc.err)
+
 			// Create agent with mock client
-			agent := NewFileChangeAgent("test-token")
-			agent.client = &mockDropboxClient{
-				entries: tc.entries,
-				hasMore: tc.hasMore,
-				cursor: tc.cursor,
-				err:    tc.err,
+			agent := &fileChangeAgent{
+				client: mockClient,
 			}
 
-			// Execute agent
-			args := map[string]interface{}{
-				"timeWindow": tc.timeWindow,
+			// Test DetectChanges
+			changes, err := agent.DetectChanges(context.Background())
+
+			// Check error
+			if (err != nil) != tc.wantErr {
+				t.Errorf("DetectChanges() error = %v, wantErr %v", err, tc.wantErr)
+				return
 			}
-			contextVars := map[string]interface{}{}
 
-			result := agent.Execute(args, contextVars)
-
-			if tc.wantErr {
-				if result.Success {
-					t.Error("Expected error but got success")
-				}
-			} else {
-				if !result.Success {
-					t.Errorf("Expected success but got error: %v", result.Error)
-				}
-
-				changes, ok := result.Data.([]map[string]interface{})
-				if !ok {
-					t.Error("Expected []map[string]interface{} result")
-					return
-				}
-
-				if len(changes) != tc.wantCount {
-					t.Errorf("Expected %d changes, got %d", tc.wantCount, len(changes))
-				}
-
-				// For successful cases with changes, verify the first change
-				if len(changes) > 0 {
-					change := changes[0]
-					if path, ok := change["Path"].(string); !ok || path != "/test1.txt" {
-						t.Errorf("Expected path /test1.txt, got %v", path)
-					}
-					if changeType, ok := change["Type"].(string); !ok || changeType != "modified" {
-						t.Errorf("Expected type 'modified', got %v", changeType)
-					}
-				}
+			// Check number of changes
+			if !tc.wantErr {
+				assert.Equal(t, tc.wantCount, len(changes))
 			}
+
+			// Verify mock expectations
+			mockClient.AssertExpectations(t)
 		})
 	}
 }
 
-func TestFileChangeAgent_GetChanges(t *testing.T) {
-	now := time.Now()
-	
-	testCases := []struct {
-		name     string
-		duration time.Duration
-		entries  []files.IsMetadata
-		hasMore  bool
-		cursor   string
-		err      error
-		want     int
-		wantErr  bool
-	}{
-		{
-			name:     "Recent files",
-			duration: 12 * time.Hour,
-			entries: []files.IsMetadata{
-				&files.FileMetadata{
-					Metadata: files.Metadata{
-						Name:        "test1.txt",
-						PathDisplay: "/test1.txt",
-					},
-					ServerModified: now,
-				},
-				&files.FileMetadata{
-					Metadata: files.Metadata{
-						Name:        "test2.txt",
-						PathDisplay: "/test2.txt",
-					},
-					ServerModified: now.Add(-24 * time.Hour),
-				},
-			},
-			hasMore:  false,
-			cursor:   "",
-			err:      nil,
-			want:     1,
-			wantErr:  false,
-		},
-		{
-			name:     "Dropbox error",
-			duration: 12 * time.Hour,
-			entries:  nil,
-			hasMore:  false,
-			cursor:   "",
-			err:      errors.New("dropbox error"),
-			want:     0,
-			wantErr:  true,
-		},
-	}
+// DropboxError is a mock error type for testing
+type DropboxError struct {
+	Message string
+}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			agent := NewFileChangeAgent("test-token")
-			agent.client = &mockDropboxClient{
-				entries: tc.entries,
-				hasMore: tc.hasMore,
-				cursor: tc.cursor,
-				err:    tc.err,
-			}
-
-			changes, err := agent.getChanges(tc.duration)
-
-			if tc.wantErr {
-				if err == nil {
-					t.Error("Expected error but got nil")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Unexpected error: %v", err)
-				}
-
-				if len(changes) != tc.want {
-					t.Errorf("Expected %d changes, got %d", tc.want, len(changes))
-				}
-			}
-		})
-	}
+func (e *DropboxError) Error() string {
+	return e.Message
 }

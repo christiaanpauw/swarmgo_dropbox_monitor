@@ -3,113 +3,91 @@ package agents
 import (
 	"context"
 	"fmt"
-	"time"
+	"path/filepath"
 
-	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox"
-	"github.com/dropbox/dropbox-sdk-go-unofficial/v6/dropbox/files"
-	"github.com/prathyushnallamothu/swarmgo"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/dropbox"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 )
 
+// FileChangeAgent interface for detecting file changes
+type FileChangeAgent interface {
+	GetChanges(ctx context.Context) ([]*models.FileChange, error)
+	DetectChanges(ctx context.Context) ([]*models.FileChange, error)
+	GetFileContent(ctx context.Context, path string) ([]byte, error)
+}
+
+// fileChangeAgent implements the FileChangeAgent interface
 type fileChangeAgent struct {
-	dbxConfig dropbox.Config
-	client    DropboxFilesClient
+	client dropbox.Client
 }
 
-func NewFileChangeAgent(token string) FileChangeAgent {
-	config := dropbox.Config{
-		Token: token,
+// NewFileChangeAgent creates a new file change agent
+func NewFileChangeAgent(token string) (FileChangeAgent, error) {
+	client, err := dropbox.NewDropboxClient(token)
+	if err != nil {
+		return nil, fmt.Errorf("create dropbox client: %w", err)
 	}
+
 	return &fileChangeAgent{
-		dbxConfig: config,
-		client:    files.New(config),
-	}
+		client: client,
+	}, nil
 }
 
-func (fca *fileChangeAgent) DetectChanges(ctx context.Context, timeWindow string) ([]FileChange, error) {
-	// Parse time window
-	duration, err := time.ParseDuration(timeWindow)
+// GetChanges gets the latest changes from Dropbox
+func (a *fileChangeAgent) GetChanges(ctx context.Context) ([]*models.FileChange, error) {
+	return a.DetectChanges(ctx)
+}
+
+// DetectChanges detects changes in Dropbox files
+func (a *fileChangeAgent) DetectChanges(ctx context.Context) ([]*models.FileChange, error) {
+	entries, err := a.client.ListFolder(ctx, "")
 	if err != nil {
-		return nil, fmt.Errorf("invalid time window: %v", err)
+		return nil, fmt.Errorf("list folder: %w", err)
 	}
 
-	// Calculate start time
-	startTime := time.Now().Add(-duration)
-
-	// List folder
-	arg := files.NewListFolderArg("")
-	arg.Recursive = true
-	result, err := fca.client.ListFolder(arg)
-	if err != nil {
-		return nil, fmt.Errorf("error listing folder: %v", err)
-	}
-
-	var changes []FileChange
-	for _, entry := range result.Entries {
-		switch f := entry.(type) {
-		case *files.FileMetadata:
-			if f.ServerModified.After(startTime) {
-				changes = append(changes, FileChange{
-					Path:    f.PathLower,
-					ModTime: f.ServerModified.Format(time.RFC3339),
-					Metadata: map[string]interface{}{
-						"id":            f.Id,
-						"name":          f.Name,
-						"size":          f.Size,
-						"content_hash":  f.ContentHash,
-						"path_display":  f.PathDisplay,
-						"is_downloadable": f.IsDownloadable,
-					},
-				})
-			}
-		}
-	}
-
-	// Continue listing if there are more entries
-	for result.HasMore {
-		arg := files.NewListFolderContinueArg(result.Cursor)
-		result, err = fca.client.ListFolderContinue(arg)
-		if err != nil {
-			return nil, fmt.Errorf("error continuing folder listing: %v", err)
-		}
-
-		for _, entry := range result.Entries {
-			switch f := entry.(type) {
-			case *files.FileMetadata:
-				if f.ServerModified.After(startTime) {
-					changes = append(changes, FileChange{
-						Path:    f.PathLower,
-						ModTime: f.ServerModified.Format(time.RFC3339),
-						Metadata: map[string]interface{}{
-							"id":            f.Id,
-							"name":          f.Name,
-							"size":          f.Size,
-							"content_hash":  f.ContentHash,
-							"path_display":  f.PathDisplay,
-							"is_downloadable": f.IsDownloadable,
-						},
-					})
-				}
-			}
-		}
+	var changes []*models.FileChange
+	for _, entry := range entries {
+		changes = append(changes, &models.FileChange{
+			Path:      entry.Path,
+			Extension: filepath.Ext(entry.Path),
+			Directory: filepath.Dir(entry.Path),
+			ModTime:   entry.Modified,
+			IsDeleted: entry.IsDeleted,
+		})
 	}
 
 	return changes, nil
 }
 
-func (fca *fileChangeAgent) Execute(args map[string]interface{}, contextVariables map[string]interface{}) swarmgo.Result {
-	timeWindow := args["timeWindow"].(string)
-
-	// Detect changes
-	changes, err := fca.DetectChanges(context.Background(), timeWindow)
+// Execute implements the Agent interface
+func (a *fileChangeAgent) Execute(ctx context.Context) error {
+	changes, err := a.GetChanges(ctx)
 	if err != nil {
-		return swarmgo.Result{
-			Success: false,
-			Error:   err,
+		return fmt.Errorf("get changes: %w", err)
+	}
+
+	// Process changes
+	for _, change := range changes {
+		if err := a.processChange(ctx, change); err != nil {
+			return fmt.Errorf("process change %s: %w", change.Path, err)
 		}
 	}
 
-	return swarmgo.Result{
-		Success: true,
-		Data:    changes,
+	return nil
+}
+
+// processChange processes a single file change
+func (a *fileChangeAgent) processChange(ctx context.Context, change *models.FileChange) error {
+	if change.IsDeleted {
+		// Handle deleted file
+		return nil
 	}
+
+	// Get file content is handled by the agent manager
+	return nil
+}
+
+// GetFileContent gets file content from Dropbox
+func (a *fileChangeAgent) GetFileContent(ctx context.Context, path string) ([]byte, error) {
+	return a.client.GetFileContent(ctx, path)
 }

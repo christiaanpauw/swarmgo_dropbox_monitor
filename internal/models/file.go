@@ -15,10 +15,14 @@ type FileMetadata struct {
 
 // FileContent represents analyzed content of a file
 type FileContent struct {
-	Path     string   `json:"path"`
-	Keywords []string `json:"keywords,omitempty"`
-	Topics   []string `json:"topics,omitempty"`
-	Summary  string   `json:"summary,omitempty"`
+	Path         string   `json:"path"`
+	ContentType  string   `json:"content_type"`
+	Size         int64    `json:"size"`
+	IsBinary     bool     `json:"is_binary"`
+	ContentHash  string   `json:"content_hash"`
+	Keywords     []string `json:"keywords,omitempty"`
+	Topics       []string `json:"topics,omitempty"`
+	Summary      string   `json:"summary,omitempty"`
 }
 
 // FileChange represents a processed file change with additional metadata

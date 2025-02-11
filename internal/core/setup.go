@@ -30,7 +30,7 @@ func NewMonitor(dbConnStr, dropboxToken string) (*Monitor, error) {
 	}
 
 	// Initialize DatabaseAgent
-	dbAgent, err := agents.NewDatabaseAgent(dbConnStr)
+	dbAgent, err := agents.NewDatabaseAgent()
 	if err != nil {
 		db.Close() // Clean up DB connection if agent fails
 		return nil, fmt.Errorf("error creating database agent: %w", err)

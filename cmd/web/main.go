@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/core"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/dropbox"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/report"
 	"github.com/joho/godotenv"
 	"github.com/robfig/cron/v3"
@@ -29,7 +30,8 @@ func main() {
 
 	// Initialize the monitor
 	dbConnStr := os.Getenv("DROPBOX_MONITOR_DB")
-	monitor, err := core.NewMonitor(dbConnStr)
+	dropboxToken := os.Getenv("DROPBOX_ACCESS_TOKEN")
+	monitor, err := core.NewMonitor(dbConnStr, dropboxToken)
 	if err != nil {
 		log.Fatalf("Error initializing monitor: %v", err)
 	}
@@ -38,7 +40,8 @@ func main() {
 	// Create cron scheduler
 	c := cron.New()
 	_, err = c.AddFunc("@midnight", func() {
-		changes, err := monitor.DropboxClient.GetChangesLast24Hours()
+		ctx := context.Background()
+		changes, err := monitor.DropboxClient.GetChangesLast24Hours(ctx)
 		if err != nil {
 			log.Printf("Error getting changes: %v", err)
 			return
@@ -85,19 +88,21 @@ func main() {
 		
 		var changes []string
 		var err error
-		var metadata []dropbox.FileMetadata
+		var metadata []*models.FileMetadata
+		ctx := context.Background()
 
 		switch timeWindow {
 		case "10min":
 			log.Printf("Checking last 10 minutes...")
-			metadata, err = monitor.DropboxClient.GetChangesLast10Minutes()
+			metadata, err = monitor.DropboxClient.GetChangesLast10Minutes(ctx)
 		case "1hour":
 			log.Printf("Checking last hour...")
-			since := time.Now().Add(-1 * time.Hour)
-			metadata, err = monitor.DropboxClient.GetChanges(since)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+			defer cancel()
+			metadata, err = monitor.DropboxClient.GetChanges(ctx)
 		default: // 24hours
 			log.Printf("Checking last 24 hours...")
-			metadata, err = monitor.DropboxClient.GetChangesLast24Hours()
+			metadata, err = monitor.DropboxClient.GetChangesLast24Hours(ctx)
 		}
 
 		if err != nil {

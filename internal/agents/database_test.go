@@ -1,83 +1,91 @@
 package agents
 
 import (
+	"context"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
+	"github.com/stretchr/testify/assert"
 )
 
-func setupTestDB(t *testing.T) string {
+func TestDatabaseAgent_StoreFileContent(t *testing.T) {
 	// Create a temporary directory for the test database
 	tempDir, err := os.MkdirTemp("", "dropbox_monitor_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+	assert.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	// Initialize database agent
+	agent, err := NewDatabaseAgent()
+	assert.NoError(t, err)
+
+	// Test storing file content
+	content := &models.FileContent{
+		Path:        "/test.txt",
+		ContentType: "text/plain",
+		Size:        100,
+		ContentHash: "abc123",
+		IsBinary:    false,
 	}
 
-	// Create the database path
-	dbPath := filepath.Join(tempDir, "test.db")
-
-	return dbPath
+	err = agent.StoreFileContent(context.Background(), content)
+	assert.NoError(t, err)
 }
 
-func cleanupTestDB(t *testing.T, dbPath string) {
-	// Remove the test database file and its directory
-	dir := filepath.Dir(dbPath)
-	if err := os.RemoveAll(dir); err != nil {
-		t.Errorf("Failed to cleanup test DB: %v", err)
+func TestDatabaseAgent_GetRecentChanges(t *testing.T) {
+	// Create a temporary directory for the test database
+	tempDir, err := os.MkdirTemp("", "dropbox_monitor_test")
+	assert.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	// Initialize database agent
+	agent, err := NewDatabaseAgent()
+	assert.NoError(t, err)
+
+	// Store an old file that shouldn't be included in recent changes
+	content3 := &models.FileContent{
+		Path:        "/test3.txt",
+		ContentType: "text/plain",
+		Size:        300,
+		ContentHash: "ghi789_v1", 
+		IsBinary:    false,
 	}
-}
+	err = agent.StoreFileContent(context.Background(), content3)
+	assert.NoError(t, err)
 
-func TestDatabaseAgent_Execute(t *testing.T) {
-	dbPath := setupTestDB(t)
-	defer cleanupTestDB(t, dbPath)
+	// Sleep to ensure time difference
+	time.Sleep(time.Second)
 
-	agent := NewDatabaseAgent("sqlite3://" + dbPath)
-	now := time.Now()
+	// Record the time for our "since" filter
+	since := time.Now()
 
-	changes := []map[string]interface{}{
-		{
-			"Path":    "/test1.txt",
-			"Type":    "modified",
-			"ModTime": now,
-			"Metadata": map[string]interface{}{
-				"id":           "id1",
-				"name":         "test1.txt",
-				"path_display": "/test1.txt",
-				"size":         100,
-			},
-		},
+	// Sleep again to ensure new files are after "since"
+	time.Sleep(time.Second)
+
+	// Store some test data
+	content1 := &models.FileContent{
+		Path:        "/test1.txt",
+		ContentType: "text/plain",
+		Size:        100,
+		ContentHash: "abc123_v1", 
+		IsBinary:    false,
 	}
+	err = agent.StoreFileContent(context.Background(), content1)
+	assert.NoError(t, err)
 
-	result := agent.Execute(nil, map[string]interface{}{
-		"changes": changes,
-	})
-
-	if !result.Success {
-		t.Errorf("Execute() failed: %v", result.Error)
+	content2 := &models.FileContent{
+		Path:        "/test2.txt",
+		ContentType: "text/plain",
+		Size:        200,
+		ContentHash: "def456_v1", 
+		IsBinary:    false,
 	}
-}
+	err = agent.StoreFileContent(context.Background(), content2)
+	assert.NoError(t, err)
 
-func TestDatabaseAgent_Connect(t *testing.T) {
-	dbPath := setupTestDB(t)
-	defer cleanupTestDB(t, dbPath)
-
-	agent := NewDatabaseAgent("sqlite3://" + dbPath)
-	if err := agent.Connect(); err != nil {
-		t.Errorf("Connect() failed: %v", err)
-	}
-}
-
-func TestDatabaseAgent_Close(t *testing.T) {
-	dbPath := setupTestDB(t)
-	defer cleanupTestDB(t, dbPath)
-
-	agent := NewDatabaseAgent("sqlite3://" + dbPath)
-	if err := agent.Connect(); err != nil {
-		t.Errorf("Connect() failed: %v", err)
-	}
-
-	if err := agent.Close(); err != nil {
-		t.Errorf("Close() failed: %v", err)
-	}
+	// Test getting recent changes
+	changes, err := agent.GetRecentChanges(context.Background(), since)
+	assert.NoError(t, err)
+	assert.Len(t, changes, 2)
 }

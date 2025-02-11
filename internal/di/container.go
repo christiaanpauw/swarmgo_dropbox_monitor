@@ -1,17 +1,26 @@
 package di
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/agents"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/analysis"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/config"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
+)
+
+const (
+	defaultStartupTimeout  = 30 * time.Second
+	defaultShutdownTimeout = 30 * time.Second
 )
 
 // Container manages application-wide dependencies
 type Container struct {
+	*lifecycle.BaseComponent
 	mu sync.RWMutex
 
 	config *config.Config
@@ -23,6 +32,9 @@ type Container struct {
 	reportingAgent  agents.ReportingAgent
 	contentAnalyzer analysis.ContentAnalyzer
 	notifier        notify.Notifier
+
+	// Track managed components for lifecycle management
+	components []lifecycle.Component
 }
 
 // NewContainer creates a new DI container with the provided configuration
@@ -32,7 +44,8 @@ func NewContainer(cfg *config.Config) (*Container, error) {
 	}
 
 	c := &Container{
-		config: cfg,
+		BaseComponent: lifecycle.NewBaseComponent("Container"),
+		config:        cfg,
 	}
 
 	// Initialize dependencies in the correct order
@@ -53,22 +66,37 @@ func (c *Container) initDependencies() error {
 
 	// Initialize notifier
 	c.notifier = notify.NewNotifier()
+	if lifecycleComponent, ok := c.notifier.(lifecycle.Component); ok {
+		c.components = append(c.components, lifecycleComponent)
+	}
 
 	// Initialize content analyzer
 	c.contentAnalyzer = analysis.NewContentAnalyzer()
+	if lifecycleComponent, ok := c.contentAnalyzer.(lifecycle.Component); ok {
+		c.components = append(c.components, lifecycleComponent)
+	}
 
 	// Initialize agents
 	c.fileChangeAgent, err = agents.NewFileChangeAgent(c.config.DropboxAccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to create file change agent: %w", err)
 	}
+	if lifecycleComponent, ok := c.fileChangeAgent.(lifecycle.Component); ok {
+		c.components = append(c.components, lifecycleComponent)
+	}
 
 	c.databaseAgent, err = agents.NewDatabaseAgent()
 	if err != nil {
 		return fmt.Errorf("failed to create database agent: %w", err)
 	}
+	if lifecycleComponent, ok := c.databaseAgent.(lifecycle.Component); ok {
+		c.components = append(c.components, lifecycleComponent)
+	}
 
 	c.reportingAgent = agents.NewReportingAgent(c.notifier)
+	if lifecycleComponent, ok := c.reportingAgent.(lifecycle.Component); ok {
+		c.components = append(c.components, lifecycleComponent)
+	}
 
 	// Initialize agent manager last since it depends on all other components
 	deps := agents.AgentManagerDeps{
@@ -86,6 +114,74 @@ func (c *Container) initDependencies() error {
 	}
 
 	c.agentManager = agents.NewAgentManager(cfg, deps)
+	if lifecycleComponent, ok := interface{}(c.agentManager).(lifecycle.Component); ok {
+		c.components = append(c.components, lifecycleComponent)
+	}
+
+	c.SetState(lifecycle.StateInitialized)
+	return nil
+}
+
+// Start starts all components in the container
+func (c *Container) Start(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.State() != lifecycle.StateInitialized {
+		return fmt.Errorf("container must be in Initialized state to start, current state: %s", c.State())
+	}
+
+	c.SetState(lifecycle.StateStarting)
+
+	// Start all components in order
+	for _, component := range c.components {
+		if err := lifecycle.StartupSequence(ctx, component, defaultStartupTimeout); err != nil {
+			c.SetState(lifecycle.StateFailed)
+			return fmt.Errorf("failed to start component: %w", err)
+		}
+	}
+
+	c.SetState(lifecycle.StateRunning)
+	return nil
+}
+
+// Stop stops all components in the container
+func (c *Container) Stop(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.State() != lifecycle.StateRunning {
+		return fmt.Errorf("container must be in Running state to stop, current state: %s", c.State())
+	}
+
+	c.SetState(lifecycle.StateStopping)
+
+	// Stop components in reverse order
+	for i := len(c.components) - 1; i >= 0; i-- {
+		if err := lifecycle.ShutdownSequence(ctx, c.components[i], defaultShutdownTimeout); err != nil {
+			c.SetState(lifecycle.StateFailed)
+			return fmt.Errorf("failed to stop component: %w", err)
+		}
+	}
+
+	c.SetState(lifecycle.StateStopped)
+	return nil
+}
+
+// Health checks the health of all components
+func (c *Container) Health(ctx context.Context) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.State() != lifecycle.StateRunning {
+		return fmt.Errorf("container is not running, current state: %s", c.State())
+	}
+
+	for _, component := range c.components {
+		if err := component.Health(ctx); err != nil {
+			return fmt.Errorf("component health check failed: %w", err)
+		}
+	}
 
 	return nil
 }
@@ -111,30 +207,21 @@ func (c *Container) GetContentAnalyzer() analysis.ContentAnalyzer {
 	return c.contentAnalyzer
 }
 
-// Close cleans up any resources held by the container
+// Close is deprecated, use Stop instead
 func (c *Container) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
+	defer cancel()
+	return c.Stop(ctx)
+}
 
-	var errs []error
+func (c *Container) Startup(ctx context.Context) error {
+	return c.Start(ctx)
+}
 
-	// Close database agent if it implements io.Closer
-	if closer, ok := c.databaseAgent.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close database agent: %w", err))
-		}
-	}
+func (c *Container) Shutdown(ctx context.Context) error {
+	return c.Stop(ctx)
+}
 
-	// Close notifier if it implements io.Closer
-	if closer, ok := c.notifier.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close notifier: %w", err))
-		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("errors closing container: %v", errs)
-	}
-
-	return nil
+func (c *Container) HealthCheck(ctx context.Context) error {
+	return c.Health(ctx)
 }

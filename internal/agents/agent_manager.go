@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/analysis"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
+	coremodels "github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/reporting/models"
 )
 
 // Agent represents a generic agent interface
@@ -78,6 +80,16 @@ func (am *AgentManager) Start(ctx context.Context) error {
 		return fmt.Errorf("validate dependencies: %w", err)
 	}
 
+	// Start reporting agent
+	if err := am.ReportingAgent.Start(ctx); err != nil {
+		return fmt.Errorf("start reporting agent: %w", err)
+	}
+
+	// Verify reporting agent is running
+	if am.ReportingAgent.State() != lifecycle.StateRunning {
+		return fmt.Errorf("reporting agent failed to start")
+	}
+
 	// Start polling loop
 	go am.poll(ctx)
 
@@ -96,6 +108,11 @@ func (am *AgentManager) Stop(ctx context.Context) error {
 
 	// Signal polling loop to stop
 	close(am.stopCh)
+
+	// Stop reporting agent
+	if err := am.ReportingAgent.Stop(ctx); err != nil {
+		return fmt.Errorf("stop reporting agent: %w", err)
+	}
 
 	// Close database connection
 	if am.DatabaseAgent != nil {
@@ -118,57 +135,44 @@ func (am *AgentManager) Execute(ctx context.Context) error {
 
 	// Process each change
 	for _, change := range changes {
-		if !change.IsDeleted {
-			// Get file content from Dropbox with retries
-			var content []byte
-			for attempt := 1; attempt <= am.maxRetries; attempt++ {
-				content, err = am.FileChangeAgent.GetFileContent(ctx, change.Path)
-				if err == nil {
-					break
-				}
-				if attempt < am.maxRetries {
-					time.Sleep(am.retryDelay)
-				}
-			}
-			if err != nil {
-				return fmt.Errorf("get file content: %w", err)
-			}
-
-			// Analyze content with retries
-			var analysis *models.FileContent
-			for attempt := 1; attempt <= am.maxRetries; attempt++ {
-				analysis, err = am.ContentAnalyzer.AnalyzeContent(ctx, change.Path, content)
-				if err == nil {
-					break
-				}
-				if attempt < am.maxRetries {
-					time.Sleep(am.retryDelay)
-				}
-			}
-			if err != nil {
-				return fmt.Errorf("analyze content: %w", err)
-			}
-
-			// Store analysis in database with retries
-			for attempt := 1; attempt <= am.maxRetries; attempt++ {
-				err = am.DatabaseAgent.StoreFileContent(ctx, analysis)
-				if err == nil {
-					break
-				}
-				if attempt < am.maxRetries {
-					time.Sleep(am.retryDelay)
-				}
-			}
-			if err != nil {
-				return fmt.Errorf("store file content: %w", err)
-			}
+		// Get file content
+		content, err := am.FileChangeAgent.GetFileContent(ctx, change.Path)
+		if err != nil {
+			return fmt.Errorf("get file content: %w", err)
 		}
-	}
 
-	// Generate report if there are changes
-	if len(changes) > 0 {
+		// Create file content model
+		fileContent := &coremodels.FileContent{
+			Path:        change.Path,
+			ContentType: change.Extension,
+			Size:        int64(len(content)),
+			IsBinary:    false, // TODO: Implement proper binary detection
+			ContentHash: "", // TODO: Implement content hash
+		}
+
+		// Store file content
+		if err := am.DatabaseAgent.StoreFileContent(ctx, fileContent); err != nil {
+			return fmt.Errorf("store file content: %w", err)
+		}
+
+		// Convert to reporting model
+		reportChanges := []models.FileChange{
+			{
+				Path:      change.Path,
+				Extension: change.Extension,
+				Directory: change.Directory,
+				ModTime:   change.ModTime,
+			},
+		}
+
+		// Check reporting agent state
+		if am.ReportingAgent.State() != lifecycle.StateRunning {
+			return fmt.Errorf("reporting agent not running")
+		}
+
+		// Generate report with retries
 		for attempt := 1; attempt <= am.maxRetries; attempt++ {
-			err = am.ReportingAgent.GenerateReport(ctx, changes)
+			err = am.ReportingAgent.GenerateReport(ctx, reportChanges)
 			if err == nil {
 				break
 			}

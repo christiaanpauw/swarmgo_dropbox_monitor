@@ -1,3 +1,6 @@
 dropbox-monitor
-.env
+dropbox_state.json
+config/state.json
 test.log
+data/
+.env

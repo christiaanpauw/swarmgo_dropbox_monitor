@@ -9,6 +9,9 @@ import (
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/agents"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/analysis"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/config"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/core"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/db"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/dropbox"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
 )
@@ -32,6 +35,7 @@ type Container struct {
 	reportingAgent  agents.ReportingAgent
 	contentAnalyzer analysis.ContentAnalyzer
 	notifier        notify.Notifier
+	stateManager    *core.StateManager
 
 	// Track managed components for lifecycle management
 	components []lifecycle.Component
@@ -76,11 +80,14 @@ func (c *Container) initDependencies() error {
 		c.components = append(c.components, lifecycleComponent)
 	}
 
-	// Initialize agents
-	c.fileChangeAgent, err = agents.NewFileChangeAgent(c.config.DropboxAccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to create file change agent: %w", err)
+	// Initialize state manager
+	c.stateManager = core.NewStateManager(c.config.State.FilePath)
+	if lifecycleComponent, ok := c.stateManager.(lifecycle.Component); ok {
+		c.components = append(c.components, lifecycleComponent)
 	}
+
+	// Initialize agents
+	c.fileChangeAgent = agents.NewFileChangeAgent(c.stateManager)
 	if lifecycleComponent, ok := c.fileChangeAgent.(lifecycle.Component); ok {
 		c.components = append(c.components, lifecycleComponent)
 	}
@@ -205,6 +212,13 @@ func (c *Container) GetContentAnalyzer() analysis.ContentAnalyzer {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.contentAnalyzer
+}
+
+// GetStateManager returns the initialized state manager
+func (c *Container) GetStateManager() *core.StateManager {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.stateManager
 }
 
 // Close is deprecated, use Stop instead

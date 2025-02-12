@@ -29,6 +29,9 @@ type Config struct {
 
 	// Health check configuration
 	HealthCheckInterval time.Duration `json:"health_check_interval" env:"HEALTH_CHECK_INTERVAL" default:"1m"`
+
+	// State configuration
+	StateFilePath string `json:"state_file_path" env:"STATE_FILE_PATH" default:"config/state.json"`
 }
 
 // LoadConfig loads configuration from environment variables and validates it
@@ -54,6 +57,9 @@ func LoadConfig() (*Config, error) {
 
 		// Health check configuration
 		HealthCheckInterval: getDurationOrDefault("HEALTH_CHECK_INTERVAL", time.Minute),
+
+		// State configuration
+		StateFilePath: getEnvOrDefault("STATE_FILE_PATH", filepath.Join("config", "state.json")),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -88,6 +94,11 @@ func (c *Config) Validate() error {
 	// Validate health check configuration
 	if err := c.validateHealthCheckConfig(); err != nil {
 		return fmt.Errorf("health check configuration error: %w", err)
+	}
+
+	// Validate state configuration
+	if err := c.validateStateConfig(); err != nil {
+		return fmt.Errorf("state configuration error: %w", err)
 	}
 
 	return nil
@@ -154,6 +165,21 @@ func (c *Config) validateNotificationConfig() error {
 func (c *Config) validateHealthCheckConfig() error {
 	if c.HealthCheckInterval < time.Second {
 		return fmt.Errorf("health check interval must be at least 1 second")
+	}
+
+	return nil
+}
+
+// validateStateConfig validates state-specific configuration
+func (c *Config) validateStateConfig() error {
+	if c.StateFilePath == "" {
+		return fmt.Errorf("state file path is required")
+	}
+
+	// Ensure state directory exists
+	stateDir := filepath.Dir(c.StateFilePath)
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		return fmt.Errorf("failed to create state directory: %w", err)
 	}
 
 	return nil

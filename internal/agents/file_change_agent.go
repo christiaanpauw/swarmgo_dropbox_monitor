@@ -3,43 +3,66 @@ package agents
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/core"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/dropbox"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 )
 
-// FileChangeAgent interface for detecting file changes
-type FileChangeAgent interface {
-	GetChanges(ctx context.Context) ([]*models.FileChange, error)
-	DetectChanges(ctx context.Context) ([]*models.FileChange, error)
-	GetFileContent(ctx context.Context, path string) ([]byte, error)
-}
-
-// fileChangeAgent implements the FileChangeAgent interface
-type fileChangeAgent struct {
-	client dropbox.Client
+// FileChangeAgent manages file change detection
+type FileChangeAgent struct {
+	*lifecycle.BaseComponent
+	client       *dropbox.DropboxClient
+	stateManager *core.StateManager
 }
 
 // NewFileChangeAgent creates a new file change agent
-func NewFileChangeAgent(token string) (FileChangeAgent, error) {
-	client, err := dropbox.NewDropboxClient(token)
-	if err != nil {
-		return nil, fmt.Errorf("create dropbox client: %w", err)
+func NewFileChangeAgent(client *dropbox.DropboxClient, stateManager *core.StateManager) *FileChangeAgent {
+	return &FileChangeAgent{
+		BaseComponent: lifecycle.NewBaseComponent("FileChangeAgent"),
+		client:       client,
+		stateManager: stateManager,
+	}
+}
+
+// Start implements lifecycle.Component
+func (a *FileChangeAgent) Start(ctx context.Context) error {
+	if err := a.DefaultStart(ctx); err != nil {
+		return err
 	}
 
-	return &fileChangeAgent{
-		client: client,
-	}, nil
+	log.Printf(" Starting FileChangeAgent...")
+	return nil
+}
+
+// Stop implements lifecycle.Component
+func (a *FileChangeAgent) Stop(ctx context.Context) error {
+	log.Printf(" Stopping FileChangeAgent...")
+	return a.DefaultStop(ctx)
+}
+
+// Health implements lifecycle.Component
+func (a *FileChangeAgent) Health(ctx context.Context) error {
+	if err := a.DefaultHealth(ctx); err != nil {
+		return err
+	}
+
+	if a.client == nil {
+		return fmt.Errorf("dropbox client is nil")
+	}
+
+	if a.stateManager == nil {
+		return fmt.Errorf("state manager is nil")
+	}
+
+	return nil
 }
 
 // GetChanges gets the latest changes from Dropbox
-func (a *fileChangeAgent) GetChanges(ctx context.Context) ([]*models.FileChange, error) {
-	return a.DetectChanges(ctx)
-}
-
-// DetectChanges detects changes in Dropbox files
-func (a *fileChangeAgent) DetectChanges(ctx context.Context) ([]*models.FileChange, error) {
+func (a *FileChangeAgent) GetChanges(ctx context.Context) ([]*models.FileChange, error) {
 	entries, err := a.client.ListFolder(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("list folder: %w", err)
@@ -59,8 +82,13 @@ func (a *fileChangeAgent) DetectChanges(ctx context.Context) ([]*models.FileChan
 	return changes, nil
 }
 
+// DetectChanges detects changes in Dropbox files
+func (a *FileChangeAgent) DetectChanges(ctx context.Context) ([]*models.FileChange, error) {
+	return a.GetChanges(ctx)
+}
+
 // Execute implements the Agent interface
-func (a *fileChangeAgent) Execute(ctx context.Context) error {
+func (a *FileChangeAgent) Execute(ctx context.Context) error {
 	changes, err := a.GetChanges(ctx)
 	if err != nil {
 		return fmt.Errorf("get changes: %w", err)
@@ -77,7 +105,7 @@ func (a *fileChangeAgent) Execute(ctx context.Context) error {
 }
 
 // processChange processes a single file change
-func (a *fileChangeAgent) processChange(ctx context.Context, change *models.FileChange) error {
+func (a *FileChangeAgent) processChange(ctx context.Context, change *models.FileChange) error {
 	if change.IsDeleted {
 		// Handle deleted file
 		return nil
@@ -88,6 +116,6 @@ func (a *fileChangeAgent) processChange(ctx context.Context, change *models.File
 }
 
 // GetFileContent gets file content from Dropbox
-func (a *fileChangeAgent) GetFileContent(ctx context.Context, path string) ([]byte, error) {
+func (a *FileChangeAgent) GetFileContent(ctx context.Context, path string) ([]byte, error) {
 	return a.client.GetFileContent(ctx, path)
 }

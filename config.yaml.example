@@ -1,0 +1,15 @@
+# Database configuration
+database:
+  connection_string: "postgres://user:password@localhost:5432/swarmgo_dropbox_monitor?sslmode=disable"
+
+# Dropbox configuration
+dropbox:
+  access_token: "your_dropbox_access_token"
+
+# Web server configuration
+web:
+  address: ":8080"
+
+# State configuration
+state:
+  file_path: "config/state.json"

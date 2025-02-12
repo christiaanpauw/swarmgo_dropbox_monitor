@@ -2,120 +2,55 @@ package agents
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"path/filepath"
+	"time"
 
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/agent"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/core"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/dropbox"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/interfaces"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 )
 
-// FileChangeAgent manages file change detection
-type FileChangeAgent struct {
-	*lifecycle.BaseComponent
-	client       *dropbox.DropboxClient
-	stateManager *core.StateManager
+// fileChangeAgentImpl implements FileChangeAgent
+type fileChangeAgentImpl struct {
+	agent.FileChangeAgent // Embed the core agent
 }
 
 // NewFileChangeAgent creates a new file change agent
-func NewFileChangeAgent(client *dropbox.DropboxClient, stateManager *core.StateManager) *FileChangeAgent {
-	return &FileChangeAgent{
-		BaseComponent: lifecycle.NewBaseComponent("FileChangeAgent"),
-		client:       client,
-		stateManager: stateManager,
+func NewFileChangeAgent(client interfaces.DropboxClient, stateManager interfaces.StateManager, monitorPath string) agent.FileChangeAgent {
+	baseAgent := core.NewFileChangeAgent(client, stateManager, monitorPath)
+	return &fileChangeAgentImpl{
+		FileChangeAgent: baseAgent,
 	}
 }
 
-// Start implements lifecycle.Component
-func (a *FileChangeAgent) Start(ctx context.Context) error {
-	if err := a.DefaultStart(ctx); err != nil {
-		return err
-	}
-
+// Start starts the file change monitoring
+func (a *fileChangeAgentImpl) Start(ctx context.Context) error {
 	log.Printf(" Starting FileChangeAgent...")
-	return nil
+	return a.FileChangeAgent.Start(ctx)
 }
 
-// Stop implements lifecycle.Component
-func (a *FileChangeAgent) Stop(ctx context.Context) error {
-	log.Printf(" Stopping FileChangeAgent...")
-	return a.DefaultStop(ctx)
+// Stop stops the file change monitoring
+func (a *fileChangeAgentImpl) Stop(ctx context.Context) error {
+	return a.FileChangeAgent.Stop(ctx)
 }
 
-// Health implements lifecycle.Component
-func (a *FileChangeAgent) Health(ctx context.Context) error {
-	if err := a.DefaultHealth(ctx); err != nil {
-		return err
-	}
-
-	if a.client == nil {
-		return fmt.Errorf("dropbox client is nil")
-	}
-
-	if a.stateManager == nil {
-		return fmt.Errorf("state manager is nil")
-	}
-
-	return nil
+// Health checks the health of the file change agent
+func (a *fileChangeAgentImpl) Health(ctx context.Context) error {
+	return a.FileChangeAgent.Health(ctx)
 }
 
-// GetChanges gets the latest changes from Dropbox
-func (a *FileChangeAgent) GetChanges(ctx context.Context) ([]*models.FileChange, error) {
-	entries, err := a.client.ListFolder(ctx, "")
-	if err != nil {
-		return nil, fmt.Errorf("list folder: %w", err)
-	}
-
-	var changes []*models.FileChange
-	for _, entry := range entries {
-		changes = append(changes, &models.FileChange{
-			Path:      entry.Path,
-			Extension: filepath.Ext(entry.Path),
-			Directory: filepath.Dir(entry.Path),
-			ModTime:   entry.Modified,
-			IsDeleted: entry.IsDeleted,
-		})
-	}
-
-	return changes, nil
+// GetChanges returns a list of file changes
+func (a *fileChangeAgentImpl) GetChanges(ctx context.Context) ([]models.FileChange, error) {
+	return a.FileChangeAgent.GetChanges(ctx)
 }
 
-// DetectChanges detects changes in Dropbox files
-func (a *FileChangeAgent) DetectChanges(ctx context.Context) ([]*models.FileChange, error) {
-	return a.GetChanges(ctx)
+// GetFileContent returns the content of a file
+func (a *fileChangeAgentImpl) GetFileContent(ctx context.Context, path string) ([]byte, error) {
+	return a.FileChangeAgent.GetFileContent(ctx, path)
 }
 
-// Execute implements the Agent interface
-func (a *FileChangeAgent) Execute(ctx context.Context) error {
-	changes, err := a.GetChanges(ctx)
-	if err != nil {
-		return fmt.Errorf("get changes: %w", err)
-	}
-
-	// Process changes
-	for _, change := range changes {
-		if err := a.processChange(ctx, change); err != nil {
-			return fmt.Errorf("process change %s: %w", change.Path, err)
-		}
-	}
-
-	return nil
-}
-
-// processChange processes a single file change
-func (a *FileChangeAgent) processChange(ctx context.Context, change *models.FileChange) error {
-	if change.IsDeleted {
-		// Handle deleted file
-		return nil
-	}
-
-	// Get file content is handled by the agent manager
-	return nil
-}
-
-// GetFileContent gets file content from Dropbox
-func (a *FileChangeAgent) GetFileContent(ctx context.Context, path string) ([]byte, error) {
-	return a.client.GetFileContent(ctx, path)
+// SetPollInterval sets the polling interval
+func (a *fileChangeAgentImpl) SetPollInterval(interval time.Duration) {
+	a.FileChangeAgent.SetPollInterval(interval)
 }

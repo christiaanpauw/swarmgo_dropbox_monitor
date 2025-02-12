@@ -358,18 +358,22 @@ func (c *DropboxClient) toFileMetadata(dbx *dropboxFileMetadata) (*models.FileMe
 
 // ListFolder lists files in a Dropbox folder
 func (c *DropboxClient) ListFolder(ctx context.Context, path string) ([]*models.FileMetadata, error) {
+	if path == "" {
+		return nil, NewInvalidInputError("path cannot be empty", nil)
+	}
+
 	body := map[string]interface{}{
 		"path": path,
 	}
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, NewInvalidInputError("failed to marshal request body", err)
+		return nil, NewInvalidInputError(fmt.Sprintf("failed to marshal request body for path %s", path), err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", listFolderURL, bytes.NewReader(jsonBody))
 	if err != nil {
-		return nil, NewInvalidInputError("failed to create request", err)
+		return nil, NewInvalidInputError(fmt.Sprintf("failed to create request for path %s", path), err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+c.accessToken)
@@ -377,23 +381,25 @@ func (c *DropboxClient) ListFolder(ctx context.Context, path string) ([]*models.
 
 	resp, err := c.doRequestWithRetry(req)
 	if err != nil {
-		return nil, err // Already wrapped by doRequestWithRetry
+		return nil, err // Already wrapped by doRequestWithRetry with proper context
 	}
 	defer resp.Body.Close()
 
 	var result struct {
 		Entries []dropboxFileMetadata `json:"entries"`
+		HasMore bool                  `json:"has_more"`
+		Cursor  string                `json:"cursor"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, NewServerError("failed to decode response", err)
+		return nil, NewServerError(fmt.Sprintf("failed to decode response for path %s", path), err)
 	}
 
 	files := make([]*models.FileMetadata, 0, len(result.Entries))
 	for i := range result.Entries {
 		file, err := c.toFileMetadata(&result.Entries[i])
 		if err != nil {
-			return nil, err // Already wrapped by toFileMetadata
+			return nil, NewServerError(fmt.Sprintf("failed to convert metadata for file %s in path %s", result.Entries[i].Name, path), err)
 		}
 		files = append(files, file)
 	}
@@ -403,18 +409,22 @@ func (c *DropboxClient) ListFolder(ctx context.Context, path string) ([]*models.
 
 // GetFileContent downloads a file's content from Dropbox
 func (c *DropboxClient) GetFileContent(ctx context.Context, path string) ([]byte, error) {
+	if path == "" {
+		return nil, NewInvalidInputError("path cannot be empty", nil)
+	}
+
 	body := map[string]interface{}{
 		"path": path,
 	}
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, NewInvalidInputError("failed to marshal request body", err)
+		return nil, NewInvalidInputError(fmt.Sprintf("failed to marshal request body for path %s", path), err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", downloadURL, nil)
 	if err != nil {
-		return nil, NewInvalidInputError("failed to create request", err)
+		return nil, NewInvalidInputError(fmt.Sprintf("failed to create request for path %s", path), err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+c.accessToken)
@@ -422,13 +432,18 @@ func (c *DropboxClient) GetFileContent(ctx context.Context, path string) ([]byte
 
 	resp, err := c.doRequestWithRetry(req)
 	if err != nil {
-		return nil, err // Already wrapped by doRequestWithRetry
+		return nil, err // Already wrapped by doRequestWithRetry with proper context
 	}
 	defer resp.Body.Close()
 
+	// Check if the file is too large (>100MB) to prevent memory issues
+	if resp.ContentLength > 100*1024*1024 {
+		return nil, NewFileSizeLimitError(fmt.Sprintf("file %s exceeds maximum size of 100MB (size: %d bytes)", path, resp.ContentLength), nil)
+	}
+
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, NewNetworkError("failed to read response body", err)
+		return nil, NewNetworkError(fmt.Sprintf("failed to read response body for path %s", path), err)
 	}
 
 	return content, nil

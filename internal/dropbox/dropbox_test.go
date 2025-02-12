@@ -2,6 +2,7 @@ package dropbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -55,7 +56,7 @@ func TestNewDropboxClient(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				var dbErr *Error
-				require.True(t, ErrorAs(err, &dbErr))
+				require.True(t, errors.As(err, &dbErr))
 				assert.Equal(t, tt.wantErrType, dbErr.Type)
 				return
 			}
@@ -180,7 +181,7 @@ func TestDropboxClient_ListFolder(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				var dbErr *Error
-				if assert.True(t, ErrorAs(err, &dbErr)) {
+				if assert.True(t, errors.As(err, &dbErr)) {
 					assert.Equal(t, tt.wantErrType, dbErr.Type)
 				}
 				return
@@ -259,7 +260,7 @@ func TestDropboxClient_GetFileContent(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				var dbErr *Error
-				if assert.True(t, ErrorAs(err, &dbErr)) {
+				if assert.True(t, errors.As(err, &dbErr)) {
 					assert.Equal(t, tt.wantErrType, dbErr.Type)
 				}
 				return

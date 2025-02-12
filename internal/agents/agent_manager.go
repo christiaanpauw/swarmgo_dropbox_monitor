@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/analysis"
+	cerrors "github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/errors"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
 	coremodels "github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
@@ -72,22 +73,26 @@ func (am *AgentManager) Start(ctx context.Context) error {
 	defer am.mu.Unlock()
 
 	if am.isRunning {
-		return fmt.Errorf("agent manager already running")
+		return cerrors.New(cerrors.CategoryInvalidState, "agent manager already running").
+			WithCode("AGENT_RUNNING")
 	}
 
 	// Validate dependencies
 	if err := am.validateDependencies(); err != nil {
-		return fmt.Errorf("validate dependencies: %w", err)
+		return cerrors.Wrap(err, cerrors.CategoryInvalidArgument, "invalid dependencies").
+			WithCode("DEPS_INVALID")
 	}
 
 	// Start reporting agent
 	if err := am.ReportingAgent.Start(ctx); err != nil {
-		return fmt.Errorf("start reporting agent: %w", err)
+		return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to start reporting agent").
+			WithCode("REPORTING_START_FAILED")
 	}
 
 	// Verify reporting agent is running
 	if am.ReportingAgent.State() != lifecycle.StateRunning {
-		return fmt.Errorf("reporting agent failed to start")
+		return cerrors.New(cerrors.CategoryInvalidState, "reporting agent failed to start").
+			WithCode("REPORTING_NOT_RUNNING")
 	}
 
 	// Start polling loop
@@ -111,13 +116,15 @@ func (am *AgentManager) Stop(ctx context.Context) error {
 
 	// Stop reporting agent
 	if err := am.ReportingAgent.Stop(ctx); err != nil {
-		return fmt.Errorf("stop reporting agent: %w", err)
+		return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to stop reporting agent").
+			WithCode("REPORTING_STOP_FAILED")
 	}
 
 	// Close database connection
 	if am.DatabaseAgent != nil {
 		if err := am.DatabaseAgent.Close(); err != nil {
-			return fmt.Errorf("close database: %w", err)
+			return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to close database connection").
+				WithCode("DB_CLOSE_FAILED")
 		}
 	}
 
@@ -130,7 +137,8 @@ func (am *AgentManager) Execute(ctx context.Context) error {
 	// Get file changes
 	changes, err := am.FileChangeAgent.GetChanges(ctx)
 	if err != nil {
-		return fmt.Errorf("get file changes: %w", err)
+		return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to get file changes").
+			WithCode("GET_CHANGES_FAILED")
 	}
 
 	// Process each change
@@ -138,7 +146,11 @@ func (am *AgentManager) Execute(ctx context.Context) error {
 		// Get file content
 		content, err := am.FileChangeAgent.GetFileContent(ctx, change.Path)
 		if err != nil {
-			return fmt.Errorf("get file content: %w", err)
+			return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to get file content").
+				WithCode("GET_CONTENT_FAILED").
+				WithDetails(map[string]interface{}{
+					"path": change.Path,
+				})
 		}
 
 		// Create file content model
@@ -152,7 +164,12 @@ func (am *AgentManager) Execute(ctx context.Context) error {
 
 		// Store file content
 		if err := am.DatabaseAgent.StoreFileContent(ctx, fileContent); err != nil {
-			return fmt.Errorf("store file content: %w", err)
+			return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to store file content").
+				WithCode("STORE_CONTENT_FAILED").
+				WithDetails(map[string]interface{}{
+					"path": change.Path,
+					"size": fileContent.Size,
+				})
 		}
 
 		// Convert to reporting model
@@ -167,7 +184,8 @@ func (am *AgentManager) Execute(ctx context.Context) error {
 
 		// Check reporting agent state
 		if am.ReportingAgent.State() != lifecycle.StateRunning {
-			return fmt.Errorf("reporting agent not running")
+			return cerrors.New(cerrors.CategoryInvalidState, "reporting agent not running").
+				WithCode("REPORTING_NOT_RUNNING")
 		}
 
 		// Generate report with retries
@@ -181,7 +199,12 @@ func (am *AgentManager) Execute(ctx context.Context) error {
 			}
 		}
 		if err != nil {
-			return fmt.Errorf("generate report: %w", err)
+			return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to generate report after retries").
+				WithCode("REPORT_GEN_FAILED").
+				WithDetails(map[string]interface{}{
+					"attempts": am.maxRetries,
+					"path":     change.Path,
+				})
 		}
 	}
 
@@ -211,19 +234,24 @@ func (am *AgentManager) poll(ctx context.Context) {
 // validateDependencies ensures all required dependencies are set
 func (am *AgentManager) validateDependencies() error {
 	if am.FileChangeAgent == nil {
-		return fmt.Errorf("file change agent is required")
+		return cerrors.New(cerrors.CategoryInvalidArgument, "file change agent is required").
+			WithCode("MISSING_FILE_AGENT")
 	}
 	if am.ContentAnalyzer == nil {
-		return fmt.Errorf("content analyzer is required")
+		return cerrors.New(cerrors.CategoryInvalidArgument, "content analyzer is required").
+			WithCode("MISSING_ANALYZER")
 	}
 	if am.DatabaseAgent == nil {
-		return fmt.Errorf("database agent is required")
+		return cerrors.New(cerrors.CategoryInvalidArgument, "database agent is required").
+			WithCode("MISSING_DB_AGENT")
 	}
 	if am.ReportingAgent == nil {
-		return fmt.Errorf("reporting agent is required")
+		return cerrors.New(cerrors.CategoryInvalidArgument, "reporting agent is required").
+			WithCode("MISSING_REPORT_AGENT")
 	}
 	if am.Notifier == nil {
-		return fmt.Errorf("notifier is required")
+		return cerrors.New(cerrors.CategoryInvalidArgument, "notifier is required").
+			WithCode("MISSING_NOTIFIER")
 	}
 	return nil
 }

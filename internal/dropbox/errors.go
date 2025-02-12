@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	cerrors "github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/errors"
 )
 
 // ErrorType represents the type of error that occurred
@@ -24,34 +26,40 @@ const (
 	ErrorTypeInvalidInput ErrorType = "invalid_input"
 	// ErrorTypeCircuitOpen represents a circuit breaker open error
 	ErrorTypeCircuitOpen ErrorType = "circuit_open"
+	// ErrorTypeFileSizeLimit represents a file size limit error
+	ErrorTypeFileSizeLimit ErrorType = "file_size_limit"
 )
 
 // Error represents a Dropbox API error
 type Error struct {
-	Type    ErrorType
-	Message string
-	Cause   error
+	cerr *cerrors.Error
+	Type ErrorType
 }
 
-// Error returns the error message
+// Error implements the error interface
 func (e *Error) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("%s: %v", e.Message, e.Cause)
-	}
-	return e.Message
+	return e.cerr.Error()
 }
 
 // Unwrap returns the underlying error
 func (e *Error) Unwrap() error {
-	return e.Cause
+	return e.cerr
 }
 
 // NewError creates a new Error with the given type and message
 func NewError(typ ErrorType, msg string, cause error) *Error {
+	category := typeToCategory(typ)
+	err := cerrors.New(category, msg)
+	if cause != nil {
+		err = cerrors.Wrap(cause, category, msg)
+	}
+	
 	return &Error{
-		Type:    typ,
-		Message: msg,
-		Cause:   cause,
+		cerr: err.WithCode(fmt.Sprintf("DROPBOX_%s", typ)).
+			WithDetails(map[string]interface{}{
+				"error_type": string(typ),
+			}),
+		Type: typ,
 	}
 }
 
@@ -85,21 +93,23 @@ func NewCircuitOpenError(msg string, cause error) *Error {
 	return NewError(ErrorTypeCircuitOpen, msg, cause)
 }
 
-// ErrorAs attempts to convert an error to a Dropbox Error
-func ErrorAs(err error, target **Error) bool {
-	return errors.As(err, target)
+// NewFileSizeLimitError creates a new file size limit error
+func NewFileSizeLimitError(msg string, cause error) *Error {
+	return NewError(ErrorTypeFileSizeLimit, msg, cause)
 }
 
 // IsRetryable returns true if the error is retryable
 func IsRetryable(err error) bool {
 	var dbErr *Error
-	if !ErrorAs(err, &dbErr) {
+	if !errors.As(err, &dbErr) {
 		return false
 	}
 
 	switch dbErr.Type {
-	case ErrorTypeRateLimit, ErrorTypeNetwork, ErrorTypeServer, ErrorTypeCircuitOpen:
+	case ErrorTypeNetwork, ErrorTypeRateLimit, ErrorTypeServer:
 		return true
+	case ErrorTypeAuth, ErrorTypeInvalidInput, ErrorTypeCircuitOpen, ErrorTypeFileSizeLimit:
+		return false
 	default:
 		return false
 	}
@@ -114,7 +124,31 @@ func statusToErrorType(status int) ErrorType {
 		return ErrorTypeRateLimit
 	case status >= 500:
 		return ErrorTypeServer
+	case status >= 400:
+		return ErrorTypeInvalidInput
 	default:
 		return ErrorTypeUnknown
+	}
+}
+
+// typeToCategory maps ErrorType to cerrors.Category
+func typeToCategory(typ ErrorType) cerrors.Category {
+	switch typ {
+	case ErrorTypeAuth:
+		return cerrors.CategoryPermissionDenied
+	case ErrorTypeRateLimit:
+		return cerrors.CategoryUnavailable
+	case ErrorTypeNetwork:
+		return cerrors.CategoryUnavailable
+	case ErrorTypeServer:
+		return cerrors.CategoryUnavailable
+	case ErrorTypeInvalidInput:
+		return cerrors.CategoryInvalidArgument
+	case ErrorTypeCircuitOpen:
+		return cerrors.CategoryUnavailable
+	case ErrorTypeFileSizeLimit:
+		return cerrors.CategoryInvalidArgument
+	default:
+		return cerrors.CategoryUnknown
 	}
 }

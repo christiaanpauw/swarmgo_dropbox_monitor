@@ -33,7 +33,7 @@ func NewScheduler(client interfaces.DropboxClient, reportingAgent agents.Reporti
 	}
 
 	scheduler := &Scheduler{
-		BaseComponent: lifecycle.NewBaseComponent("Scheduler"),
+		BaseComponent:  lifecycle.NewBaseComponent("Scheduler"),
 		client:        client,
 		reportingAgent: reportingAgent,
 		interval:      interval,
@@ -45,6 +45,10 @@ func NewScheduler(client interfaces.DropboxClient, reportingAgent agents.Reporti
 
 // Start starts the scheduler
 func (s *Scheduler) Start(ctx context.Context) error {
+	if err := s.DefaultStart(ctx); err != nil {
+		return err
+	}
+
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context cancelled: %w", err)
 	}
@@ -62,7 +66,6 @@ func (s *Scheduler) Stop(ctx context.Context) error {
 	}
 
 	close(s.stopCh)
-
 	s.SetState(lifecycle.StateStopped)
 	return nil
 }
@@ -73,8 +76,9 @@ func (s *Scheduler) Health(ctx context.Context) error {
 		return fmt.Errorf("context cancelled: %w", err)
 	}
 
+	// Check reporting agent health
 	if err := s.reportingAgent.Health(ctx); err != nil {
-		return fmt.Errorf("reporting agent health check failed: %w", err)
+		return fmt.Errorf("reporting agent unhealthy: %w", err)
 	}
 
 	return nil

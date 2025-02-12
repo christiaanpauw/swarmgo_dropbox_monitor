@@ -2,55 +2,103 @@ package scheduler
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"time"
 
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/agents"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/dropbox"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/interfaces"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/reporting"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/reporting/models"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 )
 
 // Scheduler manages periodic execution of file change detection and reporting
 type Scheduler struct {
 	*lifecycle.BaseComponent
-	client   *dropbox.DropboxClient
-	notifier notify.Notifier
-	reporter reporting.Reporter
-	interval time.Duration
-	stopCh   chan struct{}
+	client        interfaces.DropboxClient
+	reportingAgent agents.ReportingAgent
+	interval      time.Duration
+	stopCh        chan struct{}
 }
 
-// NewScheduler creates a new scheduler instance
-func NewScheduler(client *dropbox.DropboxClient, notifier notify.Notifier, interval time.Duration) *Scheduler {
-	return &Scheduler{
+// NewScheduler creates a new scheduler
+func NewScheduler(client interfaces.DropboxClient, reportingAgent agents.ReportingAgent, interval time.Duration) (*Scheduler, error) {
+	if client == nil {
+		return nil, fmt.Errorf("client cannot be nil")
+	}
+	if reportingAgent == nil {
+		return nil, fmt.Errorf("reporting agent cannot be nil")
+	}
+	if interval <= 0 {
+		return nil, fmt.Errorf("interval must be greater than 0")
+	}
+
+	scheduler := &Scheduler{
 		BaseComponent: lifecycle.NewBaseComponent("Scheduler"),
 		client:        client,
-		notifier:      notifier,
-		reporter:      reporting.NewReporter(notifier),
+		reportingAgent: reportingAgent,
 		interval:      interval,
 		stopCh:        make(chan struct{}),
 	}
+	scheduler.SetState(lifecycle.StateInitialized)
+	return scheduler, nil
 }
 
-// Start begins periodic execution
+// Start starts the scheduler
 func (s *Scheduler) Start(ctx context.Context) error {
-	if err := s.DefaultStart(ctx); err != nil {
-		return err
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled: %w", err)
 	}
 
 	go s.run(ctx)
+
+	s.SetState(lifecycle.StateRunning)
 	return nil
 }
 
-// Stop halts periodic execution
+// Stop stops the scheduler
 func (s *Scheduler) Stop(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled: %w", err)
+	}
+
 	close(s.stopCh)
-	return s.DefaultStop(ctx)
+
+	s.SetState(lifecycle.StateStopped)
+	return nil
 }
 
+// Health checks the health of the scheduler
+func (s *Scheduler) Health(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled: %w", err)
+	}
+
+	if err := s.reportingAgent.Health(ctx); err != nil {
+		return fmt.Errorf("reporting agent health check failed: %w", err)
+	}
+
+	return nil
+}
+
+// Initialize initializes the scheduler
+func (s *Scheduler) Initialize(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled: %w", err)
+	}
+
+	// Validate dependencies are ready
+	if s.client == nil {
+		return fmt.Errorf("dropbox client not initialized")
+	}
+	if s.reportingAgent == nil {
+		return fmt.Errorf("reporting agent not initialized")
+	}
+
+	s.SetState(lifecycle.StateInitialized)
+	return nil
+}
+
+// run executes the scheduler loop
 func (s *Scheduler) run(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -63,42 +111,38 @@ func (s *Scheduler) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := s.execute(ctx); err != nil {
-				log.Printf("Error executing scheduled task: %v", err)
+				fmt.Printf("Error executing scheduled task: %v\n", err)
 			}
 		}
 	}
 }
 
+// execute performs a single execution of the scheduler
 func (s *Scheduler) execute(ctx context.Context) error {
-	// Get file changes
-	changes, err := s.client.GetChangesLast24Hours(ctx)
+	// Get file changes from Dropbox
+	changes, err := s.client.GetChanges(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get file changes: %w", err)
 	}
 
 	if len(changes) == 0 {
-		return nil
+		return nil // No changes to report
 	}
 
-	// Convert changes to reporting model
-	reportChanges := make([]models.FileChange, 0, len(changes))
-	for _, change := range changes {
-		reportChanges = append(reportChanges, models.FileChange{
-			Path:      change.PathLower,
-			Extension: "",
-			Size:      0,
-			Modified:  change.ServerModified,
-		})
+	// Convert to models.FileChange
+	fileChanges := make([]models.FileChange, len(changes))
+	for i, change := range changes {
+		fileChanges[i] = models.FileChange{
+			Path:      change.Path,
+			Size:      change.Size,
+			Modified:  change.Modified,
+			IsDeleted: change.IsDeleted,
+		}
 	}
 
-	// Generate and send report
-	report, err := s.reporter.GenerateReport(ctx, reportChanges)
-	if err != nil {
-		return err
-	}
-
-	if err := s.reporter.SendReport(ctx, report); err != nil {
-		return err
+	// Generate report
+	if err := s.reportingAgent.GenerateReport(ctx, fileChanges); err != nil {
+		return fmt.Errorf("failed to generate report: %w", err)
 	}
 
 	return nil

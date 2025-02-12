@@ -12,4 +12,5 @@ type DropboxClient interface {
 	GetChangesLast24Hours(ctx context.Context) ([]*models.FileMetadata, error)
 	GetChangesLast10Minutes(ctx context.Context) ([]*models.FileMetadata, error)
 	GetChanges(ctx context.Context) ([]*models.FileMetadata, error)
+	GetFileChanges(ctx context.Context) ([]models.FileChange, error)
 }

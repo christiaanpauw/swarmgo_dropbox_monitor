@@ -45,14 +45,17 @@ func TestDatabaseAgent_StoreFileContent(t *testing.T) {
 
 	// Test storing file content
 	content := &models.FileContent{
-		Path:        "/test.txt",
 		ContentType: "text/plain",
-		Size:        100,
-		ContentHash: "abc123",
-		IsBinary:    false,
 	}
 
 	err := agent.StoreFileContent(context.Background(), content)
+	assert.NoError(t, err)
+
+	// Test storing another file content
+	content = &models.FileContent{
+		ContentType: "application/json",
+	}
+	err = agent.StoreFileContent(context.Background(), content)
 	assert.NoError(t, err)
 }
 
@@ -60,49 +63,66 @@ func TestDatabaseAgent_GetRecentChanges(t *testing.T) {
 	agent, _, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// Store an old file that shouldn't be included in recent changes
-	content3 := &models.FileContent{
-		Path:        "/test3.txt",
-		ContentType: "text/plain",
-		Size:        300,
-		ContentHash: "ghi789_v1", 
-		IsBinary:    false,
-	}
-	err := agent.StoreFileContent(context.Background(), content3)
-	assert.NoError(t, err)
-
-	// Sleep to ensure time difference
-	time.Sleep(time.Second)
-
-	// Record the time for our "since" filter
-	since := time.Now()
-
-	// Sleep again to ensure new files are after "since"
-	time.Sleep(time.Second)
-
 	// Store some test data
-	content1 := &models.FileContent{
-		Path:        "/test1.txt",
-		ContentType: "text/plain",
-		Size:        100,
-		ContentHash: "abc123_v1", 
-		IsBinary:    false,
+	content1 := &models.FileMetadata{
+		Path:    "/test1.txt",
+		Size:    100,
+		ModTime: time.Now(),
 	}
-	err = agent.StoreFileContent(context.Background(), content1)
+	err := agent.StoreChange(context.Background(), *content1)
 	assert.NoError(t, err)
 
-	content2 := &models.FileContent{
-		Path:        "/test2.txt",
-		ContentType: "text/plain",
-		Size:        200,
-		ContentHash: "def456_v1", 
-		IsBinary:    false,
+	content2 := &models.FileMetadata{
+		Path:    "/test2.txt",
+		Size:    200,
+		ModTime: time.Now(),
 	}
-	err = agent.StoreFileContent(context.Background(), content2)
+	err = agent.StoreChange(context.Background(), *content2)
 	assert.NoError(t, err)
 
-	// Test getting recent changes
-	changes, err := agent.GetRecentChanges(context.Background(), since)
+	// Test getting latest changes
+	changes, err := agent.GetLatestChanges(context.Background(), 10)
 	assert.NoError(t, err)
 	assert.Len(t, changes, 2)
+
+	// Verify the changes are returned in the correct order
+	assert.Equal(t, content2.Path, changes[0].Path)
+	assert.Equal(t, content1.Path, changes[1].Path)
+}
+
+func TestDatabaseAgent_GetChanges(t *testing.T) {
+	agent, _, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	startTime := time.Now().Add(-time.Hour).Format(time.RFC3339)
+	endTime := time.Now().Add(time.Hour).Format(time.RFC3339)
+
+	// Store some test data
+	content := &models.FileMetadata{
+		Path:    "/test.txt",
+		Size:    100,
+		ModTime: time.Now(),
+	}
+	err := agent.StoreChange(context.Background(), *content)
+	assert.NoError(t, err)
+
+	// Test getting changes within time range
+	changes, err := agent.GetChanges(context.Background(), startTime, endTime)
+	assert.NoError(t, err)
+	assert.Len(t, changes, 1)
+	assert.Equal(t, content.Path, changes[0].Path)
+}
+
+func TestDatabaseAgent_Health(t *testing.T) {
+	agent, _, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Test health check
+	err := agent.Health(context.Background())
+	assert.NoError(t, err)
+
+	// Test health check after closing connection
+	agent.Close()
+	err = agent.Health(context.Background())
+	assert.Error(t, err)
 }

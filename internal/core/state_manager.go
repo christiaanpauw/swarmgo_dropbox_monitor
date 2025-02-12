@@ -21,11 +21,13 @@ type StateManager struct {
 
 // NewStateManager creates a new state manager
 func NewStateManager(statePath string) *StateManager {
-	return &StateManager{
+	sm := &StateManager{
 		BaseComponent: lifecycle.NewBaseComponent("StateManager"),
 		statePath:     statePath,
-		state:        make(map[string]interface{}),
+		state:         make(map[string]interface{}),
 	}
+	sm.SetState(lifecycle.StateInitialized)
+	return sm
 }
 
 // Start implements lifecycle.Component

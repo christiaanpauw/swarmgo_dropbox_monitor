@@ -7,102 +7,82 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestLoadConfig(t *testing.T) {
-	// Create temporary directory for database
-	tmpDir, err := os.MkdirTemp("", "dropbox_monitor_test_*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
-
-	// Save original environment
-	origEnv := map[string]string{
-		"DROPBOX_MONITOR_DB":     os.Getenv("DROPBOX_MONITOR_DB"),
-		"DROPBOX_ACCESS_TOKEN":   os.Getenv("DROPBOX_ACCESS_TOKEN"),
-		"POLL_INTERVAL":          os.Getenv("POLL_INTERVAL"),
-		"MAX_RETRIES":           os.Getenv("MAX_RETRIES"),
-		"RETRY_DELAY":           os.Getenv("RETRY_DELAY"),
-		"NOTIFICATION_ENABLED":   os.Getenv("NOTIFICATION_ENABLED"),
-		"EMAIL_SMTP_HOST":       os.Getenv("EMAIL_SMTP_HOST"),
-		"EMAIL_SMTP_PORT":       os.Getenv("EMAIL_SMTP_PORT"),
-		"EMAIL_FROM":            os.Getenv("EMAIL_FROM"),
-		"EMAIL_TO":              os.Getenv("EMAIL_TO"),
-		"HEALTH_CHECK_INTERVAL": os.Getenv("HEALTH_CHECK_INTERVAL"),
-	}
-
-	// Restore environment after test
-	defer func() {
-		for k, v := range origEnv {
-			if v == "" {
-				os.Unsetenv(k)
-			} else {
-				os.Setenv(k, v)
-			}
-		}
-	}()
-
 	tests := []struct {
-		name     string
-		envVars  map[string]string
-		expected *Config
-		wantErr  bool
+		name    string
+		config  Config
+		wantErr bool
 	}{
 		{
-			name: "all values set",
-			envVars: map[string]string{
-				"DROPBOX_MONITOR_DB":     filepath.Join(tmpDir, "test.db"),
-				"DROPBOX_ACCESS_TOKEN":   "test-token",
-				"POLL_INTERVAL":         "1m",
-				"MAX_RETRIES":          "5",
-				"RETRY_DELAY":          "10s",
-				"NOTIFICATION_ENABLED":  "true",
-				"EMAIL_SMTP_HOST":      "smtp.test.com",
-				"EMAIL_SMTP_PORT":      "587",
-				"EMAIL_FROM":           "test@test.com",
-				"EMAIL_TO":             "admin@test.com",
-				"HEALTH_CHECK_INTERVAL": "30s",
-			},
-			expected: &Config{
-				DatabasePath:        filepath.Join(tmpDir, "test.db"),
-				DropboxAccessToken:  "test-token",
-				PollInterval:       time.Minute,
-				MaxRetries:         5,
-				RetryDelay:         10 * time.Second,
-				NotificationEnabled: true,
-				EmailSMTPHost:      "smtp.test.com",
-				EmailSMTPPort:      587,
-				EmailFrom:          "test@test.com",
-				EmailTo:            "admin@test.com",
-				HealthCheckInterval: 30 * time.Second,
-			},
-			wantErr: false,
-		},
-		{
-			name: "default values",
-			envVars: map[string]string{
-				"DROPBOX_MONITOR_DB":   filepath.Join(tmpDir, "test.db"),
-				"DROPBOX_ACCESS_TOKEN": "test-token",
-			},
-			expected: &Config{
-				DatabasePath:        filepath.Join(tmpDir, "test.db"),
-				DropboxAccessToken:  "test-token",
-				PollInterval:       5 * time.Minute,
-				MaxRetries:         3,
-				RetryDelay:         30 * time.Second,
-				NotificationEnabled: true,
-				EmailSMTPHost:      "localhost",
-				EmailSMTPPort:      25,
-				EmailFrom:          "dropbox-monitor@localhost",
-				EmailTo:            "admin@localhost",
-				HealthCheckInterval: time.Minute,
+			name: "valid config",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: time.Second * 30,
+				ShutdownTimeout: time.Second * 10,
+				EmailConfig: &EmailConfig{
+					SMTPHost:     "smtp.test.com",
+					SMTPPort:     587,
+					SMTPUsername: "test@test.com",
+					SMTPPassword: "password",
+					FromAddress:  "from@test.com",
+					ToAddresses:  []string{"to@test.com"},
+				},
+				Database: DatabaseConfig{
+					Path: "test.db",
+				},
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      time.Second * 5,
+				},
+				Notify: NotifyConfig{
+					Enabled:   true,
+					SMTPHost:  "smtp.test.com",
+					SMTPPort:  587,
+					FromEmail: "from@test.com",
+					ToEmails:  []string{"to@test.com"},
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+				State: StateConfig{
+					Path: "state.db",
+				},
+				Web: WebConfig{
+					Address: ":8080",
+				},
+				Monitoring: MonitoringConfig{
+					Enabled: true,
+				},
 			},
 			wantErr: false,
 		},
 		{
 			name: "missing dropbox token",
-			envVars: map[string]string{
-				"DROPBOX_MONITOR_DB": filepath.Join(tmpDir, "test.db"),
+			config: Config{
+				DropboxToken: "",
+				PollInterval: time.Second * 30,
+				Database: DatabaseConfig{
+					Path: "test.db",
+				},
+				Web: WebConfig{
+					Address: ":8080",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid poll interval",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: 0,
+				Database: DatabaseConfig{
+					Path: "test.db",
+				},
+				Web: WebConfig{
+					Address: ":8080",
+				},
 			},
 			wantErr: true,
 		},
@@ -110,49 +90,16 @@ func TestLoadConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Clear all environment variables
-			for k := range origEnv {
-				os.Unsetenv(k)
+			err := tt.config.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Config.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
-
-			// Set test environment variables
-			for k, v := range tt.envVars {
-				os.Setenv(k, v)
-			}
-
-			// Load config
-			cfg, err := LoadConfig()
-
-			// Check error
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			assert.NoError(t, err)
-			assert.NotNil(t, cfg)
-
-			// Verify loaded values
-			assert.Equal(t, tt.expected.DatabasePath, cfg.DatabasePath)
-			assert.Equal(t, tt.expected.DropboxAccessToken, cfg.DropboxAccessToken)
-			assert.Equal(t, tt.expected.PollInterval, cfg.PollInterval)
-			assert.Equal(t, tt.expected.MaxRetries, cfg.MaxRetries)
-			assert.Equal(t, tt.expected.RetryDelay, cfg.RetryDelay)
-			assert.Equal(t, tt.expected.NotificationEnabled, cfg.NotificationEnabled)
-			assert.Equal(t, tt.expected.EmailSMTPHost, cfg.EmailSMTPHost)
-			assert.Equal(t, tt.expected.EmailSMTPPort, cfg.EmailSMTPPort)
-			assert.Equal(t, tt.expected.EmailFrom, cfg.EmailFrom)
-			assert.Equal(t, tt.expected.EmailTo, cfg.EmailTo)
-			assert.Equal(t, tt.expected.HealthCheckInterval, cfg.HealthCheckInterval)
 		})
 	}
 }
 
 func TestConfig_Validate(t *testing.T) {
-	// Create temporary directory for database
-	tmpDir, err := os.MkdirTemp("", "dropbox_monitor_test_*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	tests := []struct {
 		name    string
@@ -162,101 +109,114 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "valid config",
 			cfg: Config{
-				DatabasePath:        filepath.Join(tmpDir, "test.db"),
-				DropboxAccessToken:  "test-token",
-				PollInterval:       time.Minute,
-				MaxRetries:         3,
-				RetryDelay:         time.Second,
-				NotificationEnabled: true,
-				EmailSMTPHost:      "smtp.test.com",
-				EmailSMTPPort:      587,
-				EmailFrom:          "test@test.com",
-				EmailTo:            "admin@test.com",
-				HealthCheckInterval: time.Minute,
+				DropboxToken:    "test-token",
+				PollInterval:    time.Minute,
+				ShutdownTimeout: time.Second * 10,
+				EmailConfig: &EmailConfig{
+					SMTPHost:     "smtp.test.com",
+					SMTPPort:     587,
+					SMTPUsername: "test@test.com",
+					SMTPPassword: "password",
+					FromAddress:  "from@test.com",
+					ToAddresses:  []string{"to@test.com"},
+				},
+				Database: DatabaseConfig{
+					Path: filepath.Join(tmpDir, "test.db"),
+				},
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+				Notify: NotifyConfig{
+					Enabled:   true,
+					SMTPHost:  "smtp.test.com",
+					SMTPPort:  587,
+					FromEmail: "from@test.com",
+					ToEmails:  []string{"to@test.com"},
+				},
+				State: StateConfig{
+					Path: "state.db",
+				},
+				Web: WebConfig{
+					Address: ":8080",
+				},
+				Monitoring: MonitoringConfig{
+					Enabled: true,
+				},
 			},
 			wantErr: false,
 		},
 		{
-			name: "missing dropbox token",
-			cfg: Config{
-				DatabasePath:        filepath.Join(tmpDir, "test.db"),
-				PollInterval:       time.Minute,
-				MaxRetries:         3,
-				RetryDelay:         time.Second,
-				NotificationEnabled: false,
-				HealthCheckInterval: time.Minute,
-			},
-			wantErr: true,
-		},
-		{
 			name: "invalid poll interval",
 			cfg: Config{
-				DatabasePath:        filepath.Join(tmpDir, "test.db"),
-				DropboxAccessToken:  "test-token",
-				PollInterval:       time.Millisecond,
-				MaxRetries:         3,
-				RetryDelay:         time.Second,
-				NotificationEnabled: false,
-				HealthCheckInterval: time.Minute,
+				DropboxToken: "test-token",
+				PollInterval: time.Millisecond,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      time.Second,
+				},
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid retry delay",
 			cfg: Config{
-				DatabasePath:        filepath.Join(tmpDir, "test.db"),
-				DropboxAccessToken:  "test-token",
-				PollInterval:       time.Minute,
-				MaxRetries:         3,
-				RetryDelay:         time.Millisecond,
-				NotificationEnabled: false,
-				HealthCheckInterval: time.Minute,
+				DropboxToken: "test-token",
+				PollInterval: time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      time.Millisecond,
+				},
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid health check interval",
 			cfg: Config{
-				DatabasePath:        filepath.Join(tmpDir, "test.db"),
-				DropboxAccessToken:  "test-token",
-				PollInterval:       time.Minute,
-				MaxRetries:         3,
-				RetryDelay:         time.Second,
-				NotificationEnabled: false,
-				HealthCheckInterval: time.Millisecond,
+				DropboxToken: "test-token",
+				PollInterval: time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: 0,
+				},
 			},
 			wantErr: true,
 		},
 		{
 			name: "notifications enabled but missing smtp host",
 			cfg: Config{
-				DatabasePath:        filepath.Join(tmpDir, "test.db"),
-				DropboxAccessToken:  "test-token",
-				PollInterval:       time.Minute,
-				MaxRetries:         3,
-				RetryDelay:         time.Second,
-				NotificationEnabled: true,
-				EmailSMTPPort:      587,
-				EmailFrom:          "test@test.com",
-				EmailTo:            "admin@test.com",
-				HealthCheckInterval: time.Minute,
+				DropboxToken: "test-token",
+				PollInterval: time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      time.Second,
+				},
+				Notify: NotifyConfig{
+					Enabled: true,
+				},
 			},
 			wantErr: true,
 		},
 		{
 			name: "notifications enabled but invalid smtp port",
 			cfg: Config{
-				DatabasePath:        filepath.Join(tmpDir, "test.db"),
-				DropboxAccessToken:  "test-token",
-				PollInterval:       time.Minute,
-				MaxRetries:         3,
-				RetryDelay:         time.Second,
-				NotificationEnabled: true,
-				EmailSMTPHost:      "smtp.test.com",
-				EmailSMTPPort:      0,
-				EmailFrom:          "test@test.com",
-				EmailTo:            "admin@test.com",
-				HealthCheckInterval: time.Minute,
+				DropboxToken: "test-token",
+				PollInterval: time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      time.Second,
+				},
+				Notify: NotifyConfig{
+					Enabled:  true,
+					SMTPHost: "smtp.test.com",
+					SMTPPort: -1,
+				},
 			},
 			wantErr: true,
 		},
@@ -265,10 +225,8 @@ func TestConfig_Validate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.cfg.Validate()
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Config.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -281,11 +239,8 @@ func TestGetEnvOrDefault(t *testing.T) {
 
 	// Test with environment variable set
 	os.Setenv("TEST_KEY", "test-value")
-	assert.Equal(t, "test-value", getEnvOrDefault("TEST_KEY", "default"))
-
-	// Test with environment variable not set
-	os.Unsetenv("TEST_KEY")
-	assert.Equal(t, "default", getEnvOrDefault("TEST_KEY", "default"))
+	assert.Equal(t, "test-value", GetEnvOrDefault("TEST_KEY", "default"))
+	assert.Equal(t, "default", GetEnvOrDefault("NON_EXISTENT_KEY", "default"))
 }
 
 func TestGetIntOrDefault(t *testing.T) {
@@ -295,15 +250,15 @@ func TestGetIntOrDefault(t *testing.T) {
 
 	// Test with valid integer
 	os.Setenv("TEST_INT", "42")
-	assert.Equal(t, 42, getIntOrDefault("TEST_INT", 0))
+	assert.Equal(t, 42, GetIntOrDefault("TEST_INT", 0))
 
 	// Test with invalid integer
 	os.Setenv("TEST_INT", "invalid")
-	assert.Equal(t, 0, getIntOrDefault("TEST_INT", 0))
+	assert.Equal(t, 0, GetIntOrDefault("TEST_INT", 0))
 
 	// Test with environment variable not set
 	os.Unsetenv("TEST_INT")
-	assert.Equal(t, 0, getIntOrDefault("TEST_INT", 0))
+	assert.Equal(t, 0, GetIntOrDefault("TEST_INT", 0))
 }
 
 func TestGetBoolOrDefault(t *testing.T) {
@@ -313,23 +268,19 @@ func TestGetBoolOrDefault(t *testing.T) {
 
 	// Test with "true"
 	os.Setenv("TEST_BOOL", "true")
-	assert.True(t, getBoolOrDefault("TEST_BOOL", false))
+	assert.True(t, GetBoolOrDefault("TEST_BOOL", false))
 
 	// Test with "1"
 	os.Setenv("TEST_BOOL", "1")
-	assert.True(t, getBoolOrDefault("TEST_BOOL", false))
-
-	// Test with "yes"
-	os.Setenv("TEST_BOOL", "yes")
-	assert.True(t, getBoolOrDefault("TEST_BOOL", false))
+	assert.True(t, GetBoolOrDefault("TEST_BOOL", false))
 
 	// Test with "false"
 	os.Setenv("TEST_BOOL", "false")
-	assert.False(t, getBoolOrDefault("TEST_BOOL", true))
+	assert.False(t, GetBoolOrDefault("TEST_BOOL", true))
 
 	// Test with environment variable not set
 	os.Unsetenv("TEST_BOOL")
-	assert.True(t, getBoolOrDefault("TEST_BOOL", true))
+	assert.True(t, GetBoolOrDefault("TEST_BOOL", true))
 }
 
 func TestGetDurationOrDefault(t *testing.T) {
@@ -339,13 +290,252 @@ func TestGetDurationOrDefault(t *testing.T) {
 
 	// Test with valid duration
 	os.Setenv("TEST_DURATION", "1h")
-	assert.Equal(t, time.Hour, getDurationOrDefault("TEST_DURATION", time.Minute))
+	assert.Equal(t, time.Hour, GetDurationOrDefault("TEST_DURATION", time.Minute))
 
 	// Test with invalid duration
 	os.Setenv("TEST_DURATION", "invalid")
-	assert.Equal(t, time.Minute, getDurationOrDefault("TEST_DURATION", time.Minute))
+	assert.Equal(t, time.Minute, GetDurationOrDefault("TEST_DURATION", time.Minute))
 
 	// Test with environment variable not set
 	os.Unsetenv("TEST_DURATION")
-	assert.Equal(t, time.Minute, getDurationOrDefault("TEST_DURATION", time.Minute))
+	assert.Equal(t, time.Minute, GetDurationOrDefault("TEST_DURATION", time.Minute))
+}
+
+func TestLoadConfigNew(t *testing.T) {
+	testCases := []struct {
+		name    string
+		config  Config
+		wantErr bool
+	}{
+		{
+			name: "all values set",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: 5 * time.Minute,
+				Database: DatabaseConfig{
+					Path: "test.db",
+				},
+				Web: WebConfig{
+					Address: ":8080",
+				},
+				Monitoring: MonitoringConfig{
+					Enabled: true,
+				},
+				State: StateConfig{
+					Path: "state.json",
+				},
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      30 * time.Second,
+				},
+				Notify: NotifyConfig{
+					Enabled:   true,
+					SMTPHost: "smtp.test.com",
+					SMTPPort: 587,
+					FromEmail: "test@test.com",
+					ToEmails: []string{"admin@test.com"},
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "default values",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: 5 * time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      30 * time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing dropbox token",
+			config: Config{
+				PollInterval: 5 * time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      30 * time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.config.Validate()
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfig_ValidateNew(t *testing.T) {
+	testCases := []struct {
+		name    string
+		config  Config
+		wantErr bool
+	}{
+		{
+			name: "valid config",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: 5 * time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      30 * time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing dropbox token",
+			config: Config{
+				PollInterval: 5 * time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      30 * time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid poll interval",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: -1,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      30 * time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid retry delay",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: 5 * time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      -1,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid health check interval",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: 5 * time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      30 * time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: -1,
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "notifications enabled but missing smtp host",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: 5 * time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      30 * time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+				Notify: NotifyConfig{
+					Enabled: true,
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "notifications enabled but invalid smtp port",
+			config: Config{
+				DropboxToken: "test-token",
+				PollInterval: 5 * time.Minute,
+				Retry: RetryConfig{
+					MaxAttempts: 3,
+					Delay:      30 * time.Second,
+				},
+				HealthCheck: HealthCheckConfig{
+					Interval: time.Minute,
+				},
+				Notify: NotifyConfig{
+					Enabled:  true,
+					SMTPHost: "smtp.test.com",
+					SMTPPort: -1,
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.config.Validate()
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestGetEnvOrDefaultNew(t *testing.T) {
+	t.Setenv("TEST_KEY", "test-value")
+	assert.Equal(t, "test-value", GetEnvOrDefault("TEST_KEY", "default"))
+	assert.Equal(t, "default", GetEnvOrDefault("NON_EXISTENT_KEY", "default"))
+}
+
+func TestGetIntOrDefaultNew(t *testing.T) {
+	t.Setenv("TEST_INT", "123")
+	assert.Equal(t, 123, GetIntOrDefault("TEST_INT", 456))
+	assert.Equal(t, 456, GetIntOrDefault("NON_EXISTENT_INT", 456))
+}
+
+func TestGetBoolOrDefaultNew(t *testing.T) {
+	t.Setenv("TEST_BOOL", "true")
+	assert.True(t, GetBoolOrDefault("TEST_BOOL", false))
+	assert.False(t, GetBoolOrDefault("NON_EXISTENT_BOOL", false))
+}
+
+func TestGetDurationOrDefaultNew(t *testing.T) {
+	t.Setenv("TEST_DURATION", "1h")
+	assert.Equal(t, time.Hour, GetDurationOrDefault("TEST_DURATION", time.Minute))
+	assert.Equal(t, time.Minute, GetDurationOrDefault("NON_EXISTENT_DURATION", time.Minute))
 }

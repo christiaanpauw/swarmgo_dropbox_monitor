@@ -5,10 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/analysis"
-	coremodels "github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/reporting/models"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -19,14 +16,33 @@ type mockFileChangeAgent struct {
 	mock.Mock
 }
 
-func (m *mockFileChangeAgent) GetChanges(ctx context.Context) ([]*coremodels.FileChange, error) {
+func (m *mockFileChangeAgent) Start(ctx context.Context) error {
 	args := m.Called(ctx)
-	return args.Get(0).([]*coremodels.FileChange), args.Error(1)
+	return args.Error(0)
 }
 
-func (m *mockFileChangeAgent) DetectChanges(ctx context.Context) ([]*coremodels.FileChange, error) {
+func (m *mockFileChangeAgent) Stop(ctx context.Context) error {
 	args := m.Called(ctx)
-	return args.Get(0).([]*coremodels.FileChange), args.Error(1)
+	return args.Error(0)
+}
+
+func (m *mockFileChangeAgent) Health(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *mockFileChangeAgent) State() lifecycle.ComponentState {
+	args := m.Called()
+	return args.Get(0).(lifecycle.ComponentState)
+}
+
+func (m *mockFileChangeAgent) GetChanges(ctx context.Context) ([]models.FileChange, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]models.FileChange), args.Error(1)
+}
+
+func (m *mockFileChangeAgent) SetPollInterval(interval time.Duration) {
+	m.Called(interval)
 }
 
 func (m *mockFileChangeAgent) GetFileContent(ctx context.Context, path string) ([]byte, error) {
@@ -38,19 +54,39 @@ type mockDatabaseAgent struct {
 	mock.Mock
 }
 
-func (m *mockDatabaseAgent) StoreFileContent(ctx context.Context, content *coremodels.FileContent) error {
-	args := m.Called(ctx, content)
+func (m *mockDatabaseAgent) Start(ctx context.Context) error {
+	args := m.Called(ctx)
 	return args.Error(0)
 }
 
-func (m *mockDatabaseAgent) GetRecentChanges(ctx context.Context, since time.Time) ([]*coremodels.FileChange, error) {
-	args := m.Called(ctx, since)
-	return args.Get(0).([]*coremodels.FileChange), args.Error(1)
+func (m *mockDatabaseAgent) Stop(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
 }
 
-func (m *mockDatabaseAgent) Close() error {
+func (m *mockDatabaseAgent) Health(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *mockDatabaseAgent) State() lifecycle.ComponentState {
 	args := m.Called()
+	return args.Get(0).(lifecycle.ComponentState)
+}
+
+func (m *mockDatabaseAgent) StoreChange(ctx context.Context, change models.FileMetadata) error {
+	args := m.Called(ctx, change)
 	return args.Error(0)
+}
+
+func (m *mockDatabaseAgent) GetLatestChanges(ctx context.Context, limit int) ([]models.FileMetadata, error) {
+	args := m.Called(ctx, limit)
+	return args.Get(0).([]models.FileMetadata), args.Error(1)
+}
+
+func (m *mockDatabaseAgent) GetChanges(ctx context.Context, startTime, endTime string) ([]models.FileMetadata, error) {
+	args := m.Called(ctx, startTime, endTime)
+	return args.Get(0).([]models.FileMetadata), args.Error(1)
 }
 
 type mockReportingAgent struct {
@@ -72,9 +108,9 @@ func (m *mockReportingAgent) Health(ctx context.Context) error {
 	return args.Error(0)
 }
 
-func (m *mockReportingAgent) State() lifecycle.State {
+func (m *mockReportingAgent) State() lifecycle.ComponentState {
 	args := m.Called()
-	return args.Get(0).(lifecycle.State)
+	return args.Get(0).(lifecycle.ComponentState)
 }
 
 func (m *mockReportingAgent) GenerateReport(ctx context.Context, changes []models.FileChange) error {
@@ -82,222 +118,162 @@ func (m *mockReportingAgent) GenerateReport(ctx context.Context, changes []model
 	return args.Error(0)
 }
 
+func (m *mockReportingAgent) NotifyChanges(ctx context.Context, changes []models.FileChange) error {
+	args := m.Called(ctx, changes)
+	return args.Error(0)
+}
+
 func TestAgentManager_Start(t *testing.T) {
 	// Create mocks
-	fileChangeAgent := &mockFileChangeAgent{}
-	databaseAgent := &mockDatabaseAgent{}
-	contentAnalyzer := analysis.NewContentAnalyzer()
-	notifier := notify.NewNotifier()
-	reportingAgent := &mockReportingAgent{}
+	fileChangeAgent := new(mockFileChangeAgent)
+	databaseAgent := new(mockDatabaseAgent)
+	reportingAgent := new(mockReportingAgent)
 
-	// Create config
-	cfg := AgentManagerConfig{
-		PollInterval: time.Millisecond * 100, // Short interval for testing
-		MaxRetries:   3,
-		RetryDelay:   time.Millisecond * 10,
-	}
-
-	// Create dependencies
-	deps := AgentManagerDeps{
-		FileChangeAgent:  fileChangeAgent,
-		ContentAnalyzer:  contentAnalyzer,
-		DatabaseAgent:    databaseAgent,
-		ReportingAgent:   reportingAgent,
-		Notifier:        notifier,
-	}
+	// Setup expectations for initialization
+	fileChangeAgent.On("State").Return(lifecycle.StateInitialized).Times(1)
+	databaseAgent.On("State").Return(lifecycle.StateInitialized).Times(1)
+	reportingAgent.On("State").Return(lifecycle.StateInitialized).Times(1)
 
 	// Create agent manager
-	manager := NewAgentManager(cfg, deps)
+	am := NewAgentManager(AgentManagerDeps{
+		FileChangeAgent: fileChangeAgent,
+		DatabaseAgent:   databaseAgent,
+		ReportingAgent:  reportingAgent,
+		Notifier:        nil,
+		ContentAnalyzer: nil,
+	})
 
-	// Set up expectations
-	fileChangeAgent.On("GetChanges", mock.Anything).Return([]*coremodels.FileChange{}, nil).Once()
-	databaseAgent.On("Close").Return(nil).Once()
-	reportingAgent.On("Start", mock.Anything).Return(nil).Once()
-	reportingAgent.On("State").Return(lifecycle.StateRunning).Once()  // Only called once during Execute
-	reportingAgent.On("Stop", mock.Anything).Return(nil).Once()
-
-	// Start the manager
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-
-	err := manager.Start(ctx)
+	// Initialize agent manager
+	err := am.Initialize(context.Background())
 	assert.NoError(t, err)
-	assert.True(t, manager.IsRunning())
 
-	// Wait for at least one poll
-	time.Sleep(150 * time.Millisecond)
+	// Setup expectations for start
+	fileChangeAgent.On("Start", mock.Anything).Return(nil).Times(1)
+	databaseAgent.On("Start", mock.Anything).Return(nil).Times(1)
+	reportingAgent.On("Start", mock.Anything).Return(nil).Times(1)
 
-	// Stop the manager
-	err = manager.Stop(ctx)
+	fileChangeAgent.On("State").Return(lifecycle.StateRunning).Times(1)
+	databaseAgent.On("State").Return(lifecycle.StateRunning).Times(1)
+	reportingAgent.On("State").Return(lifecycle.StateRunning).Times(1)
+
+	// Start agent manager
+	err = am.Start(context.Background())
 	assert.NoError(t, err)
-	assert.False(t, manager.IsRunning())
 
-	// Verify expectations
+	// Assert expectations
 	fileChangeAgent.AssertExpectations(t)
 	databaseAgent.AssertExpectations(t)
 	reportingAgent.AssertExpectations(t)
 }
 
-func TestAgentManager_Execute(t *testing.T) {
+func TestAgentManager_Stop(t *testing.T) {
 	// Create mocks
-	fileChangeAgent := &mockFileChangeAgent{}
-	databaseAgent := &mockDatabaseAgent{}
-	contentAnalyzer := analysis.NewContentAnalyzer()
-	notifier := notify.NewNotifier()
-	reportingAgent := &mockReportingAgent{}
+	fileChangeAgent := new(mockFileChangeAgent)
+	databaseAgent := new(mockDatabaseAgent)
+	reportingAgent := new(mockReportingAgent)
 
-	// Create config
-	cfg := AgentManagerConfig{
-		PollInterval: time.Second,
-		MaxRetries:   3,
-		RetryDelay:   time.Millisecond * 10,
-	}
-
-	// Create dependencies
-	deps := AgentManagerDeps{
-		FileChangeAgent:  fileChangeAgent,
-		ContentAnalyzer:  contentAnalyzer,
-		DatabaseAgent:    databaseAgent,
-		ReportingAgent:   reportingAgent,
-		Notifier:        notifier,
-	}
+	// Setup expectations for initialization and start
+	fileChangeAgent.On("State").Return(lifecycle.StateInitialized).Once()
+	databaseAgent.On("State").Return(lifecycle.StateInitialized).Once()
+	reportingAgent.On("State").Return(lifecycle.StateInitialized).Once()
 
 	// Create agent manager
-	manager := NewAgentManager(cfg, deps)
+	am := NewAgentManager(AgentManagerDeps{
+		FileChangeAgent: fileChangeAgent,
+		DatabaseAgent:   databaseAgent,
+		ReportingAgent:  reportingAgent,
+		Notifier:        nil,
+		ContentAnalyzer: nil,
+	})
 
-	// Set up test data
-	testTime := time.Now()
-	changes := []*coremodels.FileChange{
-		{
-			Path:      "/test1.txt",
-			Extension: ".txt",
-			Directory: "/",
-			ModTime:   testTime,
-		},
-	}
+	// Initialize agent manager
+	err := am.Initialize(context.Background())
+	assert.NoError(t, err)
 
-	// Expected reporting changes
-	reportChanges := []models.FileChange{
-		{
-			Path:      "/test1.txt",
-			Extension: ".txt",
-			Directory: "/",
-			ModTime:   testTime,
-		},
-	}
+	// Setup expectations for start
+	fileChangeAgent.On("Start", mock.Anything).Return(nil).Once()
+	databaseAgent.On("Start", mock.Anything).Return(nil).Once()
+	reportingAgent.On("Start", mock.Anything).Return(nil).Once()
 
-	// Set up expectations
-	fileChangeAgent.On("GetChanges", mock.Anything).Return(changes, nil).Once()
-	fileChangeAgent.On("GetFileContent", mock.Anything, "/test1.txt").Return([]byte("test content 1"), nil).Once()
-	databaseAgent.On("StoreFileContent", mock.Anything, mock.MatchedBy(func(content *coremodels.FileContent) bool {
-		return content.Path == "/test1.txt"
-	})).Return(nil).Once()
-	reportingAgent.On("GenerateReport", mock.Anything, reportChanges).Return(nil).Once()
+	fileChangeAgent.On("State").Return(lifecycle.StateRunning).Once()
+	databaseAgent.On("State").Return(lifecycle.StateRunning).Once()
 	reportingAgent.On("State").Return(lifecycle.StateRunning).Once()
 
-	// Execute the manager
-	ctx := context.Background()
-	err := manager.Execute(ctx)
+	// Start agent manager
+	err = am.Start(context.Background())
 	assert.NoError(t, err)
 
-	// Verify expectations
+	// Setup expectations for stop
+	fileChangeAgent.On("Stop", mock.Anything).Return(nil).Once()
+	databaseAgent.On("Stop", mock.Anything).Return(nil).Once()
+	reportingAgent.On("Stop", mock.Anything).Return(nil).Once()
+
+	fileChangeAgent.On("State").Return(lifecycle.StateRunning).Once()
+	databaseAgent.On("State").Return(lifecycle.StateRunning).Once()
+	reportingAgent.On("State").Return(lifecycle.StateRunning).Once()
+
+	// Stop agent manager
+	err = am.Stop(context.Background())
+	assert.NoError(t, err)
+
+	// Assert expectations
 	fileChangeAgent.AssertExpectations(t)
 	databaseAgent.AssertExpectations(t)
 	reportingAgent.AssertExpectations(t)
 }
 
-func TestAgentManager_ValidateDependencies(t *testing.T) {
+func TestAgentManager_Health(t *testing.T) {
 	// Create mocks
-	fileChangeAgent := &mockFileChangeAgent{}
-	databaseAgent := &mockDatabaseAgent{}
-	contentAnalyzer := analysis.NewContentAnalyzer()
-	notifier := notify.NewNotifier()
-	reportingAgent := &mockReportingAgent{}
+	fileChangeAgent := new(mockFileChangeAgent)
+	databaseAgent := new(mockDatabaseAgent)
+	reportingAgent := new(mockReportingAgent)
 
-	// Create config
-	cfg := AgentManagerConfig{
-		PollInterval: time.Second,
-		MaxRetries:   3,
-		RetryDelay:   time.Millisecond * 10,
-	}
+	// Setup expectations for initialization and start
+	fileChangeAgent.On("State").Return(lifecycle.StateInitialized).Once()
+	databaseAgent.On("State").Return(lifecycle.StateInitialized).Once()
+	reportingAgent.On("State").Return(lifecycle.StateInitialized).Once()
 
-	tests := []struct {
-		name    string
-		deps    AgentManagerDeps
-		wantErr bool
-	}{
-		{
-			name: "all dependencies present",
-			deps: AgentManagerDeps{
-				FileChangeAgent:  fileChangeAgent,
-				ContentAnalyzer:  contentAnalyzer,
-				DatabaseAgent:    databaseAgent,
-				ReportingAgent:   reportingAgent,
-				Notifier:        notifier,
-			},
-			wantErr: false,
-		},
-		{
-			name: "missing file change agent",
-			deps: AgentManagerDeps{
-				ContentAnalyzer:  contentAnalyzer,
-				DatabaseAgent:    databaseAgent,
-				ReportingAgent:   reportingAgent,
-				Notifier:        notifier,
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing content analyzer",
-			deps: AgentManagerDeps{
-				FileChangeAgent:  fileChangeAgent,
-				DatabaseAgent:    databaseAgent,
-				ReportingAgent:   reportingAgent,
-				Notifier:        notifier,
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing database agent",
-			deps: AgentManagerDeps{
-				FileChangeAgent:  fileChangeAgent,
-				ContentAnalyzer:  contentAnalyzer,
-				ReportingAgent:   reportingAgent,
-				Notifier:        notifier,
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing reporting agent",
-			deps: AgentManagerDeps{
-				FileChangeAgent:  fileChangeAgent,
-				ContentAnalyzer:  contentAnalyzer,
-				DatabaseAgent:    databaseAgent,
-				Notifier:        notifier,
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing notifier",
-			deps: AgentManagerDeps{
-				FileChangeAgent:  fileChangeAgent,
-				ContentAnalyzer:  contentAnalyzer,
-				DatabaseAgent:    databaseAgent,
-				ReportingAgent:   reportingAgent,
-			},
-			wantErr: true,
-		},
-	}
+	// Create agent manager
+	am := NewAgentManager(AgentManagerDeps{
+		FileChangeAgent: fileChangeAgent,
+		DatabaseAgent:   databaseAgent,
+		ReportingAgent:  reportingAgent,
+		Notifier:        nil,
+		ContentAnalyzer: nil,
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			manager := NewAgentManager(cfg, tt.deps)
-			err := manager.validateDependencies()
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
+	// Initialize agent manager
+	err := am.Initialize(context.Background())
+	assert.NoError(t, err)
+
+	// Setup expectations for start
+	fileChangeAgent.On("Start", mock.Anything).Return(nil).Once()
+	databaseAgent.On("Start", mock.Anything).Return(nil).Once()
+	reportingAgent.On("Start", mock.Anything).Return(nil).Once()
+
+	fileChangeAgent.On("State").Return(lifecycle.StateRunning).Once()
+	databaseAgent.On("State").Return(lifecycle.StateRunning).Once()
+	reportingAgent.On("State").Return(lifecycle.StateRunning).Once()
+
+	// Start agent manager
+	err = am.Start(context.Background())
+	assert.NoError(t, err)
+
+	// Setup expectations for health check
+	fileChangeAgent.On("Health", mock.Anything).Return(nil).Once()
+	databaseAgent.On("Health", mock.Anything).Return(nil).Once()
+	reportingAgent.On("Health", mock.Anything).Return(nil).Once()
+
+	fileChangeAgent.On("State").Return(lifecycle.StateRunning).Once()
+	databaseAgent.On("State").Return(lifecycle.StateRunning).Once()
+	reportingAgent.On("State").Return(lifecycle.StateRunning).Once()
+
+	// Check health
+	err = am.Health(context.Background())
+	assert.NoError(t, err)
+
+	// Assert expectations
+	fileChangeAgent.AssertExpectations(t)
+	databaseAgent.AssertExpectations(t)
+	reportingAgent.AssertExpectations(t)
 }

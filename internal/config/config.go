@@ -4,216 +4,216 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-// Config holds all configuration for the application
+// Config holds all configuration settings
 type Config struct {
-	// Database configuration
-	DatabasePath string `json:"database_path" env:"DROPBOX_MONITOR_DB" default:"data/dropbox_monitor.db"`
-
-	// Dropbox configuration
-	DropboxAccessToken string `json:"dropbox_access_token" env:"DROPBOX_ACCESS_TOKEN" required:"true"`
-
-	// Agent configuration
-	PollInterval time.Duration `json:"poll_interval" env:"POLL_INTERVAL" default:"5m"`
-	MaxRetries   int          `json:"max_retries" env:"MAX_RETRIES" default:"3"`
-	RetryDelay   time.Duration `json:"retry_delay" env:"RETRY_DELAY" default:"30s"`
-
-	// Notification configuration
-	NotificationEnabled bool   `json:"notification_enabled" env:"NOTIFICATION_ENABLED" default:"true"`
-	EmailSMTPHost      string `json:"email_smtp_host" env:"EMAIL_SMTP_HOST" default:"localhost"`
-	EmailSMTPPort      int    `json:"email_smtp_port" env:"EMAIL_SMTP_PORT" default:"25"`
-	EmailFrom          string `json:"email_from" env:"EMAIL_FROM" default:"dropbox-monitor@localhost"`
-	EmailTo            string `json:"email_to" env:"EMAIL_TO" default:"admin@localhost"`
-
-	// Health check configuration
-	HealthCheckInterval time.Duration `json:"health_check_interval" env:"HEALTH_CHECK_INTERVAL" default:"1m"`
-
-	// State configuration
-	StateFilePath string `json:"state_file_path" env:"STATE_FILE_PATH" default:"config/state.json"`
+	DropboxToken    string        `yaml:"dropbox_token"`
+	PollInterval    time.Duration `yaml:"poll_interval"`
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+	EmailConfig     *EmailConfig  `yaml:"email_config"`
+	Database        DatabaseConfig `yaml:"database"`
+	Retry          RetryConfig   `yaml:"retry"`
+	Notify         NotifyConfig  `yaml:"notify"`
+	HealthCheck    HealthCheckConfig `yaml:"health_check"`
+	State          StateConfig    `yaml:"state"`
+	Web            WebConfig      `yaml:"web"`
+	Monitoring     MonitoringConfig `yaml:"monitoring"`
 }
 
-// LoadConfig loads configuration from environment variables and validates it
-func LoadConfig() (*Config, error) {
-	cfg := &Config{
-		// Database defaults
-		DatabasePath: getEnvOrDefault("DROPBOX_MONITOR_DB", "data/dropbox_monitor.db"),
-
-		// Dropbox configuration
-		DropboxAccessToken: os.Getenv("DROPBOX_ACCESS_TOKEN"),
-
-		// Agent configuration
-		PollInterval: getDurationOrDefault("POLL_INTERVAL", 5*time.Minute),
-		MaxRetries:   getIntOrDefault("MAX_RETRIES", 3),
-		RetryDelay:   getDurationOrDefault("RETRY_DELAY", 30*time.Second),
-
-		// Notification configuration
-		NotificationEnabled: getBoolOrDefault("NOTIFICATION_ENABLED", true),
-		EmailSMTPHost:      getEnvOrDefault("EMAIL_SMTP_HOST", "localhost"),
-		EmailSMTPPort:      getIntOrDefault("EMAIL_SMTP_PORT", 25),
-		EmailFrom:          getEnvOrDefault("EMAIL_FROM", "dropbox-monitor@localhost"),
-		EmailTo:            getEnvOrDefault("EMAIL_TO", "admin@localhost"),
-
-		// Health check configuration
-		HealthCheckInterval: getDurationOrDefault("HEALTH_CHECK_INTERVAL", time.Minute),
-
-		// State configuration
-		StateFilePath: getEnvOrDefault("STATE_FILE_PATH", filepath.Join("config", "state.json")),
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
-	}
-
-	return cfg, nil
+// DropboxConfig holds Dropbox-specific configuration
+type DropboxConfig struct {
+	Token       string        `yaml:"token"`
+	PollInterval time.Duration `yaml:"poll_interval"`
 }
 
-// Validate performs validation on all configuration values
+// DatabaseConfig holds database configuration
+type DatabaseConfig struct {
+	Path string `yaml:"path"`
+}
+
+// WebConfig holds web server configuration
+type WebConfig struct {
+	Address string `yaml:"address"`
+}
+
+// MonitoringConfig holds monitoring configuration
+type MonitoringConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Path    string `yaml:"path"`
+}
+
+// StateConfig holds state management configuration
+type StateConfig struct {
+	Path string `yaml:"path"`
+}
+
+// RetryConfig holds retry configuration
+type RetryConfig struct {
+	MaxAttempts int           `yaml:"max_attempts"`
+	Delay       time.Duration `yaml:"delay"`
+}
+
+// NotifyConfig holds notification configuration
+type NotifyConfig struct {
+	Enabled   bool     `yaml:"enabled"`
+	SMTPHost  string   `yaml:"smtp_host"`
+	SMTPPort  int      `yaml:"smtp_port"`
+	FromEmail string   `yaml:"from_email"`
+	ToEmails  []string `yaml:"to_emails"`
+}
+
+// HealthCheckConfig holds health check configuration
+type HealthCheckConfig struct {
+	Interval time.Duration `yaml:"interval"`
+}
+
+// EmailConfig represents email notification configuration
+type EmailConfig struct {
+	SMTPHost     string   `yaml:"smtp_host"`
+	SMTPPort     int      `yaml:"smtp_port"`
+	SMTPUsername string   `yaml:"smtp_username"`
+	SMTPPassword string   `yaml:"smtp_password"`
+	FromAddress  string   `yaml:"from_address"`
+	ToAddresses  []string `yaml:"to_addresses"`
+}
+
+// Validate validates the configuration
 func (c *Config) Validate() error {
-	// Validate required fields
-	if c.DropboxAccessToken == "" {
-		return fmt.Errorf("DROPBOX_ACCESS_TOKEN is required")
+	// Validate Dropbox configuration
+	if c.DropboxToken == "" {
+		return fmt.Errorf("dropbox configuration error: access token is required")
+	}
+	if c.PollInterval <= 0 {
+		return fmt.Errorf("dropbox configuration error: poll interval must be positive")
 	}
 
-	// Validate database configuration
-	if err := c.validateDatabaseConfig(); err != nil {
-		return fmt.Errorf("database configuration error: %w", err)
+	// Validate retry configuration
+	if c.Retry.MaxAttempts <= 0 {
+		return fmt.Errorf("retry configuration error: max attempts must be positive")
 	}
-
-	// Validate agent configuration
-	if err := c.validateAgentConfig(); err != nil {
-		return fmt.Errorf("agent configuration error: %w", err)
-	}
-
-	// Validate notification configuration
-	if err := c.validateNotificationConfig(); err != nil {
-		return fmt.Errorf("notification configuration error: %w", err)
+	if c.Retry.Delay <= 0 {
+		return fmt.Errorf("retry configuration error: delay must be positive")
 	}
 
 	// Validate health check configuration
-	if err := c.validateHealthCheckConfig(); err != nil {
-		return fmt.Errorf("health check configuration error: %w", err)
+	if c.HealthCheck.Interval <= 0 {
+		return fmt.Errorf("health check configuration error: interval must be positive")
+	}
+
+	// Validate notification configuration
+	if c.Notify.Enabled {
+		if c.Notify.SMTPHost == "" {
+			return fmt.Errorf("notification configuration error: SMTP host is required when notifications are enabled")
+		}
+		if c.Notify.SMTPPort <= 0 || c.Notify.SMTPPort > 65535 {
+			return fmt.Errorf("notification configuration error: invalid SMTP port")
+		}
 	}
 
 	// Validate state configuration
-	if err := c.validateStateConfig(); err != nil {
-		return fmt.Errorf("state configuration error: %w", err)
+	if c.State.Path == "" {
+		c.State.Path = filepath.Join(os.TempDir(), "dropbox_monitor_state.json")
+	} else {
+		// Ensure state directory exists
+		stateDir := filepath.Dir(c.State.Path)
+		if err := os.MkdirAll(stateDir, 0755); err != nil {
+			return fmt.Errorf("failed to create state directory: %w", err)
+		}
+	}
+
+	// Validate database configuration
+	if c.Database.Path == "" {
+		c.Database.Path = filepath.Join(os.TempDir(), "dropbox_monitor.db")
+	}
+
+	// Validate email configuration
+	if c.EmailConfig != nil {
+		if c.EmailConfig.SMTPHost == "" {
+			return fmt.Errorf("email configuration error: SMTP host is required")
+		}
+		if c.EmailConfig.SMTPPort <= 0 || c.EmailConfig.SMTPPort > 65535 {
+			return fmt.Errorf("email configuration error: invalid SMTP port")
+		}
 	}
 
 	return nil
 }
 
-// validateDatabaseConfig validates database-specific configuration
-func (c *Config) validateDatabaseConfig() error {
-	if c.DatabasePath == "" {
-		return fmt.Errorf("database path is required")
+// LoadConfig loads configuration from a file
+func LoadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// Ensure database directory exists
-	dbDir := filepath.Dir(c.DatabasePath)
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
-		return fmt.Errorf("failed to create database directory: %w", err)
+	var config Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	return nil
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+
+	return &config, nil
 }
 
-// validateAgentConfig validates agent-specific configuration
-func (c *Config) validateAgentConfig() error {
-	if c.PollInterval < time.Second {
-		return fmt.Errorf("poll interval must be at least 1 second")
-	}
-
-	if c.MaxRetries < 0 {
-		return fmt.Errorf("max retries must be non-negative")
-	}
-
-	if c.RetryDelay < time.Second {
-		return fmt.Errorf("retry delay must be at least 1 second")
-	}
-
-	return nil
-}
-
-// validateNotificationConfig validates notification-specific configuration
-func (c *Config) validateNotificationConfig() error {
-	if !c.NotificationEnabled {
-		return nil
-	}
-
-	if c.EmailSMTPHost == "" {
-		return fmt.Errorf("SMTP host is required when notifications are enabled")
-	}
-
-	if c.EmailSMTPPort <= 0 || c.EmailSMTPPort > 65535 {
-		return fmt.Errorf("invalid SMTP port: must be between 1 and 65535")
-	}
-
-	if c.EmailFrom == "" {
-		return fmt.Errorf("email from address is required when notifications are enabled")
-	}
-
-	if c.EmailTo == "" {
-		return fmt.Errorf("email to address is required when notifications are enabled")
-	}
-
-	return nil
-}
-
-// validateHealthCheckConfig validates health check-specific configuration
-func (c *Config) validateHealthCheckConfig() error {
-	if c.HealthCheckInterval < time.Second {
-		return fmt.Errorf("health check interval must be at least 1 second")
-	}
-
-	return nil
-}
-
-// validateStateConfig validates state-specific configuration
-func (c *Config) validateStateConfig() error {
-	if c.StateFilePath == "" {
-		return fmt.Errorf("state file path is required")
-	}
-
-	// Ensure state directory exists
-	stateDir := filepath.Dir(c.StateFilePath)
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
-		return fmt.Errorf("failed to create state directory: %w", err)
-	}
-
-	return nil
-}
-
-func getEnvOrDefault(key, defaultValue string) string {
+// GetEnvOrDefault gets an environment variable value or returns a default
+func GetEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
 	return defaultValue
 }
 
-func getIntOrDefault(key string, defaultValue int) int {
+// GetIntOrDefault gets an integer environment variable value or returns a default
+func GetIntOrDefault(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
-		var intValue int
-		if _, err := fmt.Sscanf(value, "%d", &intValue); err == nil {
+		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
 		}
 	}
 	return defaultValue
 }
 
-func getBoolOrDefault(key string, defaultValue bool) bool {
+// GetBoolOrDefault gets a boolean environment variable value or returns a default
+func GetBoolOrDefault(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {
-		return value == "true" || value == "1" || value == "yes"
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
+		}
 	}
 	return defaultValue
 }
 
-func getDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
+// GetDurationOrDefault gets a duration environment variable value or returns a default
+func GetDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		if duration, err := time.ParseDuration(value); err == nil {
 			return duration
 		}
 	}
 	return defaultValue
+}
+
+// NewConfig creates a new configuration with default values
+func NewConfig() *Config {
+	return &Config{
+		PollInterval: 5 * time.Minute,
+		Retry: RetryConfig{
+			MaxAttempts: 3,
+			Delay:      time.Second * 5,
+		},
+		HealthCheck: HealthCheckConfig{
+			Interval: time.Minute,
+		},
+		EmailConfig: &EmailConfig{
+			SMTPPort: 587,
+		},
+	}
 }

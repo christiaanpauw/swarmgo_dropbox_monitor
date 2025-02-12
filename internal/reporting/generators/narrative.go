@@ -2,110 +2,88 @@ package generators
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"text/template"
+	"time"
 
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/reporting/models"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 )
 
-const narrativeTemplate = `Activity Report - {{ .GeneratedAt.Format "2006-01-02 15:04:05" }}
+const narrativeTemplate = `Dropbox Activity Report - {{ .Time.Format "2006-01-02 15:04:05" }}
 
-Summary:
-There were {{ .TotalChanges }} changes detected in your Dropbox folders.
+During this period, there were {{ .TotalChanges }} file changes in your Dropbox account.
 
-{{ if .MostActiveTime }}Most Active Period:
-The highest activity was observed between {{ .MostActiveTime.Start.Format "15:04" }} and {{ .MostActiveTime.End.Format "15:04" }},
-with {{ .MostActiveTime.Changes }} changes during this period.
+File Activity:
+{{ if gt .DeletedFiles 0 }}- {{ .DeletedFiles }} files were deleted{{ end }}
+{{ if gt .ModifiedFiles 0 }}- {{ .ModifiedFiles }} files were modified{{ end }}
+
+Most Active Extensions:
+{{ range $ext, $count := .ExtensionCount }}- {{ $ext }} ({{ $count }} files)
 {{ end }}
 
-{{ if .TopHotspots }}Active Locations:
-{{ range .TopHotspots }}  - {{ .Path }} ({{ .ChangeCount }} changes)
-{{ end }}{{ end }}
-
-{{ if .Patterns }}Notable Patterns:
-{{ range .Patterns }}  - {{ .Pattern }} ({{ .Occurrences }} occurrences)
-{{ end }}{{ end }}
-
-File Type Analysis:
-{{ range $ext, $count := .Report.ExtensionCount }}  - {{ $ext }}: {{ $count }} files
+Most Active Directories:
+{{ range $dir, $count := .DirectoryCount }}- {{ $dir }}: {{ $count }} changes
 {{ end }}
 
-Recommendations:
-{{ range .Recommendations }}  - {{ . }}
-{{ end }}
-`
+Total Size of Changes: {{ printf "%.2f" .TotalSize }} MB`
 
-// NarrativeData represents the data needed for narrative report generation
-type NarrativeData struct {
-	*models.Report
-	MostActiveTime  *models.TimeRange
-	TopHotspots     []models.DirectoryHotspot
-	Patterns        []models.FilePattern
-	Recommendations []string
+type narrativeData struct {
+	Time           time.Time
+	TotalChanges   int
+	DeletedFiles   int
+	ModifiedFiles  int
+	ExtensionCount map[string]int
+	DirectoryCount map[string]int
+	TotalSize      float64
 }
 
-// GenerateNarrative generates a narrative report from the activity pattern
-func GenerateNarrative(report *models.Report, pattern *models.ActivityPattern) (string, error) {
-	// Generate recommendations based on patterns
-	recommendations := generateRecommendations(report, pattern)
+type narrativeGenerator struct {
+	template *template.Template
+}
 
-	data := NarrativeData{
-		Report:          report,
-		MostActiveTime:  pattern.GetMostActiveTimeRange(),
-		TopHotspots:     pattern.GetTopHotspots(3),
-		Patterns:        pattern.FilePatterns,
-		Recommendations: recommendations,
+// NewNarrativeGenerator creates a new narrative generator
+func NewNarrativeGenerator() Generator {
+	tmpl := template.Must(template.New("narrative").Parse(narrativeTemplate))
+	return &narrativeGenerator{template: tmpl}
+}
+
+// Generate generates a narrative report
+func (g *narrativeGenerator) Generate(ctx context.Context, report *models.Report) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context cancelled: %w", err)
 	}
 
-	tmpl, err := template.New("narrative").Parse(narrativeTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse template: %w", err)
+	if report == nil {
+		return fmt.Errorf("report cannot be nil")
+	}
+
+	data := &narrativeData{
+		Time:           time.Now(),
+		ExtensionCount: make(map[string]int),
+		DirectoryCount: make(map[string]int),
+	}
+
+	for _, change := range report.Changes {
+		data.TotalChanges++
+		if change.IsDeleted {
+			data.DeletedFiles++
+		} else {
+			data.ModifiedFiles++
+		}
+		data.ExtensionCount[change.Extension]++
+		data.DirectoryCount[change.Directory]++
+		data.TotalSize += float64(change.Size) / (1024 * 1024) // Convert to MB
 	}
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute template: %w", err)
+	if err := g.template.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute narrative template: %w", err)
 	}
 
-	return buf.String(), nil
-}
-
-// generateRecommendations analyzes patterns and generates recommendations
-func generateRecommendations(report *models.Report, pattern *models.ActivityPattern) []string {
-	var recommendations []string
-
-	// Check for high activity directories
-	if pattern != nil {
-		if hotspots := pattern.GetTopHotspots(1); len(hotspots) > 0 {
-			if hotspots[0].ChangeCount > 10 {
-				recommendations = append(recommendations,
-					fmt.Sprintf("Consider organizing files in '%s' as it shows high activity", hotspots[0].Path))
-			}
-		}
-
-		// Check time-based patterns
-		if mostActive := pattern.GetMostActiveTimeRange(); mostActive != nil {
-			if mostActive.Changes > 100 {
-				recommendations = append(recommendations,
-					"Consider spreading out large file operations to avoid system overload")
-			}
-		}
+	if report.Metadata == nil {
+		report.Metadata = make(map[string]string)
 	}
-
-	// Check file type patterns
-	for ext, count := range report.ExtensionCount {
-		switch {
-		case count > 20 && (ext == ".tmp" || ext == ".temp"):
-			recommendations = append(recommendations,
-				"Consider cleaning up temporary files as they make up a significant portion of changes")
-		case count > 50 && (ext == ".jpg" || ext == ".png"):
-			recommendations = append(recommendations,
-				"Consider using a dedicated photo management tool for better organization")
-		case count > 30 && (ext == ".doc" || ext == ".docx"):
-			recommendations = append(recommendations,
-				"Consider using document version control for better file management")
-		}
-	}
-
-	return recommendations
+	report.Metadata["content"] = buf.String()
+	return nil
 }

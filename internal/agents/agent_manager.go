@@ -3,262 +3,202 @@ package agents
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
-	"time"
 
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/agent"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/analysis"
-	cerrors "github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/errors"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
-	coremodels "github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/reporting/models"
 )
 
-// Agent represents a generic agent interface
-type Agent interface {
-	Execute(ctx context.Context) error
-}
-
-// AgentManager manages the lifecycle of all agents
-type AgentManager struct {
-	FileChangeAgent  FileChangeAgent
+// AgentManagerDeps holds dependencies for the agent manager
+type AgentManagerDeps struct {
+	FileChangeAgent  agent.FileChangeAgent
 	ContentAnalyzer  analysis.ContentAnalyzer
-	DatabaseAgent    DatabaseAgent
-	ReportingAgent   ReportingAgent
+	DatabaseAgent    agent.DatabaseAgent
+	ReportingAgent   agent.ReportingAgent
 	Notifier         notify.Notifier
-
-	pollInterval time.Duration
-	maxRetries   int
-	retryDelay   time.Duration
-
-	mu        sync.RWMutex
-	isRunning bool
-	stopCh    chan struct{}
 }
 
 // AgentManagerConfig holds configuration for the agent manager
 type AgentManagerConfig struct {
-	PollInterval time.Duration
-	MaxRetries   int
-	RetryDelay   time.Duration
 }
 
-// AgentManagerDeps holds dependencies for the agent manager
-type AgentManagerDeps struct {
-	FileChangeAgent  FileChangeAgent
-	ContentAnalyzer  analysis.ContentAnalyzer
-	DatabaseAgent    DatabaseAgent
-	ReportingAgent   ReportingAgent
-	Notifier         notify.Notifier
+// AgentManager defines the interface for agent coordination
+type AgentManager interface {
+	lifecycle.Component
+	Initialize(ctx context.Context) error
+	GetFileChangeAgent() agent.FileChangeAgent
 }
 
-// NewAgentManager creates a new agent manager with the provided dependencies
-func NewAgentManager(cfg AgentManagerConfig, deps AgentManagerDeps) *AgentManager {
-	return &AgentManager{
-		FileChangeAgent:  deps.FileChangeAgent,
-		ContentAnalyzer:  deps.ContentAnalyzer,
-		DatabaseAgent:    deps.DatabaseAgent,
-		ReportingAgent:   deps.ReportingAgent,
-		Notifier:         deps.Notifier,
-		pollInterval:     cfg.PollInterval,
-		maxRetries:       cfg.MaxRetries,
-		retryDelay:       cfg.RetryDelay,
-		stopCh:           make(chan struct{}),
+// AgentManagerImpl implements the AgentManager interface
+type AgentManagerImpl struct {
+	*lifecycle.BaseComponent
+	deps   AgentManagerDeps
+	config AgentManagerConfig
+	stopCh chan struct{}
+	mu     sync.RWMutex
+}
+
+// NewAgentManager creates a new agent manager
+func NewAgentManager(deps AgentManagerDeps) AgentManager {
+	am := &AgentManagerImpl{
+		BaseComponent: lifecycle.NewBaseComponent("AgentManager"),
+		deps:         deps,
+		stopCh:       make(chan struct{}),
 	}
+	am.SetState(lifecycle.StateInitialized)
+	return am
 }
 
 // Start starts all agents
-func (am *AgentManager) Start(ctx context.Context) error {
-	am.mu.Lock()
-	defer am.mu.Unlock()
-
-	if am.isRunning {
-		return cerrors.New(cerrors.CategoryInvalidState, "agent manager already running").
-			WithCode("AGENT_RUNNING")
+func (am *AgentManagerImpl) Start(ctx context.Context) error {
+	if err := am.DefaultStart(ctx); err != nil {
+		return err
 	}
 
-	// Validate dependencies
-	if err := am.validateDependencies(); err != nil {
-		return cerrors.Wrap(err, cerrors.CategoryInvalidArgument, "invalid dependencies").
-			WithCode("DEPS_INVALID")
+	log.Printf("🚀 Starting AgentManager...")
+
+	// Check that all agents are initialized
+	if am.deps.FileChangeAgent.State() != lifecycle.StateInitialized {
+		return fmt.Errorf("file change agent not initialized")
+	}
+	if am.deps.DatabaseAgent.State() != lifecycle.StateInitialized {
+		return fmt.Errorf("database agent not initialized")
+	}
+	if am.deps.ReportingAgent.State() != lifecycle.StateInitialized {
+		return fmt.Errorf("reporting agent not initialized")
+	}
+
+	// Start file change monitoring
+	if err := am.deps.FileChangeAgent.Start(ctx); err != nil {
+		am.SetState(lifecycle.StateFailed)
+		return fmt.Errorf("failed to start file change agent: %w", err)
+	}
+
+	// Start database agent
+	if err := am.deps.DatabaseAgent.Start(ctx); err != nil {
+		am.SetState(lifecycle.StateFailed)
+		return fmt.Errorf("failed to start database agent: %w", err)
 	}
 
 	// Start reporting agent
-	if err := am.ReportingAgent.Start(ctx); err != nil {
-		return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to start reporting agent").
-			WithCode("REPORTING_START_FAILED")
+	if err := am.deps.ReportingAgent.Start(ctx); err != nil {
+		am.SetState(lifecycle.StateFailed)
+		return fmt.Errorf("failed to start reporting agent: %w", err)
 	}
 
-	// Verify reporting agent is running
-	if am.ReportingAgent.State() != lifecycle.StateRunning {
-		return cerrors.New(cerrors.CategoryInvalidState, "reporting agent failed to start").
-			WithCode("REPORTING_NOT_RUNNING")
+	// Check that all agents are running
+	if am.deps.FileChangeAgent.State() != lifecycle.StateRunning {
+		am.SetState(lifecycle.StateFailed)
+		return fmt.Errorf("file change agent failed to start")
+	}
+	if am.deps.DatabaseAgent.State() != lifecycle.StateRunning {
+		am.SetState(lifecycle.StateFailed)
+		return fmt.Errorf("database agent failed to start")
+	}
+	if am.deps.ReportingAgent.State() != lifecycle.StateRunning {
+		am.SetState(lifecycle.StateFailed)
+		return fmt.Errorf("reporting agent failed to start")
 	}
 
-	// Start polling loop
-	go am.poll(ctx)
-
-	am.isRunning = true
+	// Set state to running after all agents are started and verified
+	am.SetState(lifecycle.StateRunning)
 	return nil
 }
 
 // Stop stops all agents
-func (am *AgentManager) Stop(ctx context.Context) error {
+func (am *AgentManagerImpl) Stop(ctx context.Context) error {
+	log.Printf("🛑 Stopping AgentManager...")
+
+	if err := am.DefaultStop(ctx); err != nil {
+		return err
+	}
+
+	am.SetState(lifecycle.StateStopping)
+
+	// Stop file change monitoring
+	if err := am.deps.FileChangeAgent.Stop(ctx); err != nil {
+		am.SetState(lifecycle.StateFailed)
+		return fmt.Errorf("failed to stop file change agent: %w", err)
+	}
+
+	// Stop database agent
+	if err := am.deps.DatabaseAgent.Stop(ctx); err != nil {
+		am.SetState(lifecycle.StateFailed)
+		return fmt.Errorf("failed to stop database agent: %w", err)
+	}
+
+	// Stop reporting agent
+	if err := am.deps.ReportingAgent.Stop(ctx); err != nil {
+		am.SetState(lifecycle.StateFailed)
+		return fmt.Errorf("failed to stop reporting agent: %w", err)
+	}
+
+	am.SetState(lifecycle.StateStopped)
+	return nil
+}
+
+// Health checks the health of all agents
+func (am *AgentManagerImpl) Health(ctx context.Context) error {
+	if err := am.DefaultHealth(ctx); err != nil {
+		return err
+	}
+
+	// Check that all agents are running
+	if am.deps.FileChangeAgent.State() != lifecycle.StateRunning {
+		return fmt.Errorf("file change agent not running")
+	}
+	if am.deps.DatabaseAgent.State() != lifecycle.StateRunning {
+		return fmt.Errorf("database agent not running")
+	}
+	if am.deps.ReportingAgent.State() != lifecycle.StateRunning {
+		return fmt.Errorf("reporting agent not running")
+	}
+
+	// Check file change agent health
+	if err := am.deps.FileChangeAgent.Health(ctx); err != nil {
+		return fmt.Errorf("file change agent unhealthy: %w", err)
+	}
+
+	// Check database agent health
+	if err := am.deps.DatabaseAgent.Health(ctx); err != nil {
+		return fmt.Errorf("database agent unhealthy: %w", err)
+	}
+
+	// Check reporting agent health
+	if err := am.deps.ReportingAgent.Health(ctx); err != nil {
+		return fmt.Errorf("reporting agent unhealthy: %w", err)
+	}
+
+	return nil
+}
+
+// Initialize performs any necessary initialization before starting the agents
+func (am *AgentManagerImpl) Initialize(ctx context.Context) error {
 	am.mu.Lock()
 	defer am.mu.Unlock()
 
-	if !am.isRunning {
-		return nil
+	// Validate required dependencies
+	if am.deps.FileChangeAgent == nil {
+		return fmt.Errorf("FileChangeAgent is required")
+	}
+	if am.deps.DatabaseAgent == nil {
+		return fmt.Errorf("DatabaseAgent is required")
+	}
+	if am.deps.ReportingAgent == nil {
+		return fmt.Errorf("ReportingAgent is required")
 	}
 
-	// Signal polling loop to stop
-	close(am.stopCh)
-
-	// Stop reporting agent
-	if err := am.ReportingAgent.Stop(ctx); err != nil {
-		return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to stop reporting agent").
-			WithCode("REPORTING_STOP_FAILED")
-	}
-
-	// Close database connection
-	if am.DatabaseAgent != nil {
-		if err := am.DatabaseAgent.Close(); err != nil {
-			return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to close database connection").
-				WithCode("DB_CLOSE_FAILED")
-		}
-	}
-
-	am.isRunning = false
+	// Set state to initialized after validation
+	am.SetState(lifecycle.StateInitialized)
 	return nil
 }
 
-// Execute executes all agents once
-func (am *AgentManager) Execute(ctx context.Context) error {
-	// Get file changes
-	changes, err := am.FileChangeAgent.GetChanges(ctx)
-	if err != nil {
-		return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to get file changes").
-			WithCode("GET_CHANGES_FAILED")
-	}
-
-	// Process each change
-	for _, change := range changes {
-		// Get file content
-		content, err := am.FileChangeAgent.GetFileContent(ctx, change.Path)
-		if err != nil {
-			return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to get file content").
-				WithCode("GET_CONTENT_FAILED").
-				WithDetails(map[string]interface{}{
-					"path": change.Path,
-				})
-		}
-
-		// Create file content model
-		fileContent := &coremodels.FileContent{
-			Path:        change.Path,
-			ContentType: change.Extension,
-			Size:        int64(len(content)),
-			IsBinary:    false, // TODO: Implement proper binary detection
-			ContentHash: "", // TODO: Implement content hash
-		}
-
-		// Store file content
-		if err := am.DatabaseAgent.StoreFileContent(ctx, fileContent); err != nil {
-			return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to store file content").
-				WithCode("STORE_CONTENT_FAILED").
-				WithDetails(map[string]interface{}{
-					"path": change.Path,
-					"size": fileContent.Size,
-				})
-		}
-
-		// Convert to reporting model
-		reportChanges := []models.FileChange{
-			{
-				Path:      change.Path,
-				Extension: change.Extension,
-				Directory: change.Directory,
-				ModTime:   change.ModTime,
-			},
-		}
-
-		// Check reporting agent state
-		if am.ReportingAgent.State() != lifecycle.StateRunning {
-			return cerrors.New(cerrors.CategoryInvalidState, "reporting agent not running").
-				WithCode("REPORTING_NOT_RUNNING")
-		}
-
-		// Generate report with retries
-		for attempt := 1; attempt <= am.maxRetries; attempt++ {
-			err = am.ReportingAgent.GenerateReport(ctx, reportChanges)
-			if err == nil {
-				break
-			}
-			if attempt < am.maxRetries {
-				time.Sleep(am.retryDelay)
-			}
-		}
-		if err != nil {
-			return cerrors.Wrap(err, cerrors.CategoryUnavailable, "failed to generate report after retries").
-				WithCode("REPORT_GEN_FAILED").
-				WithDetails(map[string]interface{}{
-					"attempts": am.maxRetries,
-					"path":     change.Path,
-				})
-		}
-	}
-
-	return nil
-}
-
-// poll continuously executes agents at the configured interval
-func (am *AgentManager) poll(ctx context.Context) {
-	ticker := time.NewTicker(am.pollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-am.stopCh:
-			return
-		case <-ticker.C:
-			if err := am.Execute(ctx); err != nil {
-				// TODO: Add proper error handling/logging
-				fmt.Printf("Error executing agents: %v\n", err)
-			}
-		}
-	}
-}
-
-// validateDependencies ensures all required dependencies are set
-func (am *AgentManager) validateDependencies() error {
-	if am.FileChangeAgent == nil {
-		return cerrors.New(cerrors.CategoryInvalidArgument, "file change agent is required").
-			WithCode("MISSING_FILE_AGENT")
-	}
-	if am.ContentAnalyzer == nil {
-		return cerrors.New(cerrors.CategoryInvalidArgument, "content analyzer is required").
-			WithCode("MISSING_ANALYZER")
-	}
-	if am.DatabaseAgent == nil {
-		return cerrors.New(cerrors.CategoryInvalidArgument, "database agent is required").
-			WithCode("MISSING_DB_AGENT")
-	}
-	if am.ReportingAgent == nil {
-		return cerrors.New(cerrors.CategoryInvalidArgument, "reporting agent is required").
-			WithCode("MISSING_REPORT_AGENT")
-	}
-	if am.Notifier == nil {
-		return cerrors.New(cerrors.CategoryInvalidArgument, "notifier is required").
-			WithCode("MISSING_NOTIFIER")
-	}
-	return nil
-}
-
-// IsRunning returns true if the agent manager is running
-func (am *AgentManager) IsRunning() bool {
+// GetFileChangeAgent returns the file change agent
+func (am *AgentManagerImpl) GetFileChangeAgent() agent.FileChangeAgent {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
-	return am.isRunning
+	return am.deps.FileChangeAgent
 }

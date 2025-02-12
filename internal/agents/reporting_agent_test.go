@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/lifecycle"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/reporting/models"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,30 +14,30 @@ import (
 // mockNotifier for testing
 type mockNotifier struct {
 	sentMessages int
-	lastSubject  string
 	lastMessage  string
 	shouldError  bool
 }
 
-func (m *mockNotifier) Send(ctx context.Context, subject, message string) error {
+func (m *mockNotifier) SendNotification(ctx context.Context, message string) error {
 	if m.shouldError {
 		return assert.AnError
 	}
 	m.sentMessages++
-	m.lastSubject = subject
 	m.lastMessage = message
 	return nil
 }
 
 func TestReportingAgent_Lifecycle(t *testing.T) {
 	notifier := &mockNotifier{}
-	agent := NewReportingAgent(notifier)
+	agent, err := NewReportingAgent(notifier)
+	require.NoError(t, err)
+	require.NotNil(t, agent)
 
 	// Test initial state
 	assert.Equal(t, lifecycle.StateInitialized, agent.State())
 
 	// Test Start
-	err := agent.Start(context.Background())
+	err = agent.Start(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, lifecycle.StateRunning, agent.State())
 
@@ -55,7 +55,7 @@ func TestReportingAgent_GenerateReport(t *testing.T) {
 	tests := []struct {
 		name        string
 		changes     []models.FileChange
-		notifier    *mockNotifier
+		shouldError bool
 		wantErr     bool
 		shouldStart bool
 	}{
@@ -70,14 +70,14 @@ func TestReportingAgent_GenerateReport(t *testing.T) {
 					Size:      1024,
 				},
 			},
-			notifier:    &mockNotifier{},
+			shouldError: false,
 			wantErr:     false,
 			shouldStart: true,
 		},
 		{
 			name:        "empty changes list",
 			changes:     []models.FileChange{},
-			notifier:    &mockNotifier{},
+			shouldError: false,
 			wantErr:     false,
 			shouldStart: true,
 		},
@@ -92,7 +92,7 @@ func TestReportingAgent_GenerateReport(t *testing.T) {
 					Size:      1024,
 				},
 			},
-			notifier:    &mockNotifier{shouldError: true},
+			shouldError: true,
 			wantErr:     true,
 			shouldStart: true,
 		},
@@ -107,7 +107,7 @@ func TestReportingAgent_GenerateReport(t *testing.T) {
 					Size:      1024,
 				},
 			},
-			notifier:    &mockNotifier{},
+			shouldError: false,
 			wantErr:     true,
 			shouldStart: false,
 		},
@@ -115,14 +115,19 @@ func TestReportingAgent_GenerateReport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			agent := NewReportingAgent(tt.notifier)
+			// Create a new notifier for each test case
+			notifier := &mockNotifier{shouldError: tt.shouldError}
+
+			agent, err := NewReportingAgent(notifier)
+			require.NoError(t, err)
+			require.NotNil(t, agent)
 
 			if tt.shouldStart {
 				err := agent.Start(context.Background())
 				require.NoError(t, err)
 			}
 
-			err := agent.GenerateReport(context.Background(), tt.changes)
+			err = agent.GenerateReport(context.Background(), tt.changes)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -130,7 +135,7 @@ func TestReportingAgent_GenerateReport(t *testing.T) {
 
 			assert.NoError(t, err)
 			if len(tt.changes) > 0 {
-				assert.Equal(t, 1, tt.notifier.sentMessages)
+				assert.Equal(t, 3, notifier.sentMessages) // One message per report type
 			}
 		})
 	}

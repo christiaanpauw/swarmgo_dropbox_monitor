@@ -41,7 +41,7 @@ var (
 type CircuitBreakerConfig struct {
 	MaxFailures      int           // Number of failures before opening circuit
 	ResetTimeout     time.Duration // Time to wait before attempting to reset circuit
-	HalfOpenMaxTries int          // Number of requests to allow in half-open state
+	HalfOpenMaxTries int           // Number of requests to allow in half-open state
 }
 
 // RetryConfig holds configuration for retry behavior
@@ -53,9 +53,9 @@ type RetryConfig struct {
 
 // ClientConfig holds all client configuration
 type ClientConfig struct {
-	RetryConfig         RetryConfig
+	RetryConfig          RetryConfig
 	CircuitBreakerConfig CircuitBreakerConfig
-	Transport          *http.Transport
+	Transport            *http.Transport
 }
 
 // DefaultClientConfig returns a default configuration
@@ -90,12 +90,12 @@ func DefaultClientConfig() ClientConfig {
 
 // circuitBreaker implements the circuit breaker pattern
 type circuitBreaker struct {
-	config     CircuitBreakerConfig
-	state      string // "closed", "open", or "half-open"
-	failures   int
-	lastFailure time.Time
-	clock      Clock
-	mu         sync.Mutex
+	config        CircuitBreakerConfig
+	state         string // "closed", "open", or "half-open"
+	failures      int
+	lastFailure   time.Time
+	clock         Clock
+	mu            sync.Mutex
 	halfOpenTries int
 }
 
@@ -172,6 +172,7 @@ type Client interface {
 	GetChangesLast24Hours(ctx context.Context) ([]*models.FileMetadata, error)
 	GetChangesLast10Minutes(ctx context.Context) ([]*models.FileMetadata, error)
 	GetChanges(ctx context.Context) ([]*models.FileMetadata, error)
+	GetFileChanges(ctx context.Context) ([]models.FileChange, error)
 }
 
 // DropboxClient handles interactions with the Dropbox API
@@ -185,11 +186,11 @@ type DropboxClient struct {
 
 // clientMetrics tracks client operation metrics
 type clientMetrics struct {
-	retryCount     int64
-	requestCount   int64
-	errorCount     int64
-	lastError      error
-	lastErrorTime  time.Time
+	retryCount    int64
+	requestCount  int64
+	errorCount    int64
+	lastError     error
+	lastErrorTime time.Time
 	mu            sync.RWMutex
 }
 
@@ -332,8 +333,8 @@ type dropboxFileMetadata struct {
 	ContentHash    string `json:"content_hash"`
 	SharingInfo    struct {
 		ReadOnly             bool        `json:"read_only"`
-		ParentSharedFolderID string     `json:"parent_shared_folder_id"`
-		ModifiedBy          interface{} `json:"modified_by"`
+		ParentSharedFolderID string      `json:"parent_shared_folder_id"`
+		ModifiedBy           interface{} `json:"modified_by"`
 	} `json:"sharing_info"`
 }
 
@@ -462,4 +463,13 @@ func (c *DropboxClient) GetChangesLast10Minutes(ctx context.Context) ([]*models.
 // GetChanges returns all changes
 func (c *DropboxClient) GetChanges(ctx context.Context) ([]*models.FileMetadata, error) {
 	return c.ListFolder(ctx, "")
+}
+
+// GetFileChanges retrieves file changes from Dropbox
+func (c *DropboxClient) GetFileChanges(ctx context.Context) ([]models.FileChange, error) {
+	changes, err := c.GetChanges(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return models.BatchConvertMetadataToChanges(changes), nil
 }

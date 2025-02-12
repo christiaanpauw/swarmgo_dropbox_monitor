@@ -2,17 +2,23 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
 
-// State represents the current state of a component
-type State int
+// Common errors
+var (
+	ErrNotRunning = errors.New("component is not running")
+)
+
+// ComponentState represents the current state of a component
+type ComponentState int
 
 const (
 	// StateUninitialized is the default state of a component
-	StateUninitialized State = iota
+	StateUninitialized ComponentState = iota
 	// StateInitialized means the component has been initialized but not started
 	StateInitialized
 	// StateStarting means the component is in the process of starting
@@ -28,7 +34,7 @@ const (
 )
 
 // String returns a string representation of the state
-func (s State) String() string {
+func (s ComponentState) String() string {
 	switch s {
 	case StateUninitialized:
 		return "Uninitialized"
@@ -56,7 +62,7 @@ type Component interface {
 	// Stop stops the component
 	Stop(context.Context) error
 	// State returns the current state of the component
-	State() State
+	State() ComponentState
 	// Health returns an error if the component is unhealthy
 	Health(context.Context) error
 }
@@ -64,7 +70,7 @@ type Component interface {
 // BaseComponent provides a base implementation of the Component interface
 type BaseComponent struct {
 	mu    sync.RWMutex
-	state State
+	state ComponentState
 	name  string
 }
 
@@ -77,14 +83,14 @@ func NewBaseComponent(name string) *BaseComponent {
 }
 
 // SetState sets the component state with proper locking
-func (c *BaseComponent) SetState(s State) {
+func (c *BaseComponent) SetState(s ComponentState) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.state = s
 }
 
 // State returns the current state of the component
-func (c *BaseComponent) State() State {
+func (c *BaseComponent) State() ComponentState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.state

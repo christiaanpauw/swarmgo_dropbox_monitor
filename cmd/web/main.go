@@ -2,166 +2,79 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"flag"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/core"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/models"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/report"
-	"github.com/joho/godotenv"
-	"github.com/robfig/cron/v3"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/config"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/di"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/web"
 )
 
-type ChangeResponse struct {
-	Success bool     `json:"success"`
-	Message string   `json:"message"`
-	Changes []string `json:"changes"`
-}
-
 func main() {
-	// Load environment variables
-	if err := godotenv.Load(); err != nil {
-		log.Printf("Warning: .env file not found or error loading it: %v", err)
-	}
+	// Parse command line flags
+	configFile := flag.String("config", "config.yaml", "Path to configuration file")
+	flag.Parse()
 
-	// Initialize the monitor
-	dbConnStr := os.Getenv("DROPBOX_MONITOR_DB")
-	dropboxToken := os.Getenv("DROPBOX_ACCESS_TOKEN")
-	monitor, err := core.NewMonitor(dbConnStr, dropboxToken)
+	// Load configuration
+	cfg, err := config.LoadConfig(*configFile)
 	if err != nil {
-		log.Fatalf("Error initializing monitor: %v", err)
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
-	defer monitor.Close()
 
-	// Create cron scheduler
-	c := cron.New()
-	_, err = c.AddFunc("@midnight", func() {
-		ctx := context.Background()
-		changes, err := monitor.DropboxClient.GetChangesLast24Hours(ctx)
-		if err != nil {
-			log.Printf("Error getting changes: %v", err)
-			return
-		}
-
-		// Convert changes to strings
-		var changeStrings []string
-		for _, change := range changes {
-			changeStrings = append(changeStrings, fmt.Sprintf("%s (modified at %s)", change.PathLower, change.ServerModified))
-		}
-
-		// Generate and send report
-		reportData := report.Generate(changeStrings)
-		if err := reportData.SendReport(); err != nil {
-			log.Printf("Error sending email report: %v", err)
-		}
-	})
+	// Create DI container
+	container, err := di.NewContainer(cfg)
 	if err != nil {
-		log.Printf("Warning: Failed to set up scheduler: %v", err)
-	} else {
-		c.Start()
-		log.Println("Scheduler started. Will check Dropbox at midnight.")
+		log.Fatalf("Failed to create container: %v", err)
 	}
 
-	// Set up Gin router
-	router := gin.Default()
+	// Create web server
+	server := web.NewServer(container)
 
-	// Load HTML templates
-	router.LoadHTMLGlob("templates/*")
+	// Setup graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Serve static files
-	router.Static("/static", "./static")
+	// Handle shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Routes
-	router.GET("/", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "index.html", gin.H{
-			"title": "Dropbox Monitor",
-		})
-	})
+	go func() {
+		sig := <-sigChan
+		log.Printf("Received signal %v, initiating shutdown", sig)
+		cancel()
+	}()
 
-	router.GET("/api/changes", func(c *gin.Context) {
-		timeWindow := c.Query("window")
-		log.Printf("🔍 Received request to check changes for window: %s", timeWindow)
-		
-		var changes []string
-		var err error
-		var metadata []*models.FileMetadata
-		ctx := context.Background()
-
-		switch timeWindow {
-		case "10min":
-			log.Printf("Checking last 10 minutes...")
-			metadata, err = monitor.DropboxClient.GetChangesLast10Minutes(ctx)
-		case "1hour":
-			log.Printf("Checking last hour...")
-			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-			defer cancel()
-			metadata, err = monitor.DropboxClient.GetChanges(ctx)
-		default: // 24hours
-			log.Printf("Checking last 24 hours...")
-			metadata, err = monitor.DropboxClient.GetChangesLast24Hours(ctx)
-		}
-
-		if err != nil {
-			log.Printf("❌ Error getting changes: %v", err)
-			c.JSON(http.StatusInternalServerError, ChangeResponse{
-				Success: false,
-				Message: fmt.Sprintf("Error getting changes: %v", err),
-				Changes: []string{},
-			})
-			return
-		}
-
-		// Convert metadata to strings and log each change
-		for _, m := range metadata {
-			change := fmt.Sprintf("%s (modified at %s)", m.PathLower, m.ServerModified)
-			log.Printf("✨ Found change: %s", change)
-			changes = append(changes, change)
-		}
-
-		// Generate report
-		log.Printf("📝 Generating report for %d changes...", len(changes))
-		reportData := report.Generate(changes)
-		reportText := reportData.FormatReport()
-
-		// Send email if requested
-		if c.Query("email") == "true" {
-			log.Printf("📧 Attempting to send email report...")
-			if err := reportData.SendReport(); err != nil {
-				log.Printf("❌ Error sending email: %v", err)
-				c.JSON(http.StatusInternalServerError, ChangeResponse{
-					Success: false,
-					Message: fmt.Sprintf("Error sending email report: %v", err),
-					Changes: []string{},
-				})
-				return
-			}
-			log.Printf("✅ Email report sent successfully")
-		}
-
-		// Ensure changes is never null
-		if changes == nil {
-			changes = []string{}
-		}
-
-		log.Printf("✅ Returning %d changes", len(changes))
-		c.JSON(http.StatusOK, ChangeResponse{
-			Success: true,
-			Message: reportText,
-			Changes: changes,
-		})
-	})
-
-	// Start server
-	port := os.Getenv("WEB_PORT")
-	if port == "" {
-		port = "8080"
+	// Start container
+	if err := container.Start(ctx); err != nil {
+		log.Fatalf("Failed to start container: %v", err)
 	}
-	log.Printf("Starting web server on port %s...", port)
-	if err := router.Run(":" + port); err != nil {
-		log.Fatalf("Error starting server: %v", err)
+
+	// Start web server
+	go func() {
+		log.Printf("Starting web server on %s", cfg.Web.Address)
+		if err := server.Start(); err != nil && err != http.ErrServerClosed {
+			log.Printf("Web server error: %v", err)
+			cancel()
+		}
+	}()
+
+	// Wait for shutdown signal
+	<-ctx.Done()
+
+	// Shutdown gracefully
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	if err := server.Stop(shutdownCtx); err != nil {
+		log.Printf("Error stopping web server: %v", err)
+	}
+
+	if err := container.Stop(shutdownCtx); err != nil {
+		log.Printf("Error stopping container: %v", err)
 	}
 }

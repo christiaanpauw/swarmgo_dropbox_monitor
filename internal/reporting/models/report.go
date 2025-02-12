@@ -3,6 +3,7 @@ package models
 import (
 	"sort"
 	"time"
+	"path/filepath"
 )
 
 // FileChange represents a single file change in Dropbox
@@ -16,12 +17,12 @@ type FileChange struct {
 
 // Report represents a complete change report
 type Report struct {
+	Type           ReportType         // Type of report
 	Changes        []FileChange        // List of file changes
 	ExtensionCount map[string]int     // Count of changes by extension
 	DirectoryCount map[string]int     // Count of changes by directory
 	GeneratedAt    time.Time          // Report generation time
 	TotalChanges   int                // Total number of changes
-	ReportType     ReportType         // Type of report
 	Metadata       map[string]string  // Additional metadata
 }
 
@@ -40,11 +41,11 @@ const (
 // NewReport creates a new report instance
 func NewReport(reportType ReportType) *Report {
 	return &Report{
+		Type:           reportType,
 		Changes:        make([]FileChange, 0),
 		ExtensionCount: make(map[string]int),
 		DirectoryCount: make(map[string]int),
 		GeneratedAt:    time.Now(),
-		ReportType:     reportType,
 		Metadata:       make(map[string]string),
 	}
 }
@@ -53,7 +54,7 @@ func NewReport(reportType ReportType) *Report {
 func (r *Report) AddChange(change FileChange) {
 	r.Changes = append(r.Changes, change)
 	r.ExtensionCount[change.Extension]++
-	r.DirectoryCount[change.Directory]++
+	r.DirectoryCount[filepath.Dir(change.Path)]++
 	r.TotalChanges++
 }
 

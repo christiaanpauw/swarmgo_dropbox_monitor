@@ -21,8 +21,12 @@ swarmgo_dropbox_monitor/
 │   │   └── agent_manager.go
 │   ├── core/              # Core application logic
 │   ├── dropbox/           # Dropbox API integration
-│   ├── db/                # Database operations
-│   ├── report/            # Report generation
+│   ├── interfaces/        # Common interfaces for components
+│   │   ├── dropbox.go     # Dropbox client interface
+│   │   └── state.go       # State management interface
+│   ├── lifecycle/         # Component lifecycle management
+│   ├── container/         # Dependency injection container
+│   ├── models/            # Data models and types
 │   └── scheduler/         # Scheduling logic
 ├── templates/             # HTML templates for web interface
 └── data/                  # SQLite database and application data
@@ -30,7 +34,22 @@ swarmgo_dropbox_monitor/
 
 ## Core Components
 
-### 1. Agent System (`internal/agents/`)
+### 1. Interfaces (`internal/interfaces/`)
+
+The application uses clearly defined interfaces to ensure loose coupling between components:
+
+#### DropboxClient Interface
+```go
+type DropboxClient interface {
+    ListFolder(ctx context.Context, path string) ([]*models.FileMetadata, error)
+    GetFileContent(ctx context.Context, path string) ([]byte, error)
+    GetChanges(ctx context.Context) ([]*models.FileMetadata, error)
+    GetChangesLast24Hours(ctx context.Context) ([]*models.FileMetadata, error)
+    GetChangesLast10Minutes(ctx context.Context) ([]*models.FileMetadata, error)
+}
+```
+
+### 2. Agent System (`internal/agents/`)
 
 The application uses an agent-based architecture powered by github.com/prathyushnallamothu/swarmgo:
 
@@ -88,7 +107,7 @@ func (a *ReportingAgent) Execute(ctx context.Context) error {
 }
 ```
 
-### 2. Dropbox Client (`internal/dropbox/`)
+### 3. Dropbox Client (`internal/dropbox/`)
 
 The Dropbox client handles all interactions with the Dropbox API:
 
@@ -100,7 +119,7 @@ The Dropbox client handles all interactions with the Dropbox API:
   - Efficient file and folder listing
   - Change detection based on timestamps
 
-### 3. Database Layer (`internal/db/`)
+### 4. Database Layer (`internal/db/`)
 
 SQLite-based storage for file metadata and changes:
 
@@ -110,7 +129,7 @@ SQLite-based storage for file metadata and changes:
   - `daily_summaries`: Aggregated daily statistics
   - `sync_state`: Cursor-based synchronization state
 
-### 4. Report Generation (`internal/report/`)
+### 5. Report Generation (`internal/report/`)
 
 Handles the creation and formatting of change reports:
 
@@ -119,7 +138,7 @@ Handles the creation and formatting of change reports:
 - Statistical summaries
 - Customizable templates
 
-### 5. Scheduler (`internal/scheduler/`)
+### 6. Scheduler (`internal/scheduler/`)
 
 Manages periodic tasks and monitoring:
 

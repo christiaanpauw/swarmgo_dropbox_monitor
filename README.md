@@ -4,20 +4,32 @@ SwarmGo Dropbox Monitor is a Go application designed to monitor changes in your 
 
 ## Features
 
+- **Clean Architecture**:
+  - Well-defined interfaces for component interaction
+  - Dependency injection for better testability
+  - Lifecycle management for all components
+  - Clear separation of concerns
+
 - **Agent-Based Architecture**: Uses swarmgo for efficient agent coordination
   - FileChangeAgent: Identifies Dropbox file changes
   - DatabaseAgent: Stores changes in PostgreSQL
   - ContentAnalyzerAgent: Analyzes file contents
   - ReportingAgent: Generates reports
-- **Real-time Dropbox Monitoring**: Tracks file changes, modifications, and updates in your Dropbox account
-- **Metadata Storage**: Stores file metadata in a SQLite database for efficient querying and tracking
-- **Change Detection**: Uses Dropbox's content hash to accurately detect file changes
-- **Flexible Reporting**: Generate reports for different time windows:
-  - Last 10 minutes (quick check)
-  - Last hour
-  - Last 24 hours
-- **Email Notifications**: Sends formatted email reports about file changes
-- **Retry Mechanism**: Implements exponential backoff for reliable API communication
+
+- **Real-time Dropbox Integration**:
+  - Tracks file changes, modifications, and updates
+  - Efficient change detection using Dropbox's content hash
+  - Multiple time window options:
+    - Last 10 minutes (quick check)
+    - Last 24 hours
+    - Custom time ranges
+
+- **Robust Error Handling**:
+  - Package-specific error types
+  - Error wrapping with context
+  - Structured error handling
+  - Error categorization and retry logic
+
 - **Multiple Interfaces**:
   - CLI for command-line operations
   - Web interface for visual monitoring

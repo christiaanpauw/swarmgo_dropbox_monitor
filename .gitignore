@@ -4,3 +4,4 @@ config/state.json
 test.log
 data/
 .env
+email_test

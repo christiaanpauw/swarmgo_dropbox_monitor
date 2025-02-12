@@ -4,14 +4,13 @@ import (
 	"context"
 	"flag"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/config"
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/di"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/container"
 	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/web"
 )
 
@@ -27,7 +26,7 @@ func main() {
 	}
 
 	// Create DI container
-	container, err := di.NewContainer(cfg)
+	container, err := container.NewContainer(cfg)
 	if err != nil {
 		log.Fatalf("Failed to create container: %v", err)
 	}
@@ -55,13 +54,9 @@ func main() {
 	}
 
 	// Start web server
-	go func() {
-		log.Printf("Starting web server on %s", cfg.Web.Address)
-		if err := server.Start(); err != nil && err != http.ErrServerClosed {
-			log.Printf("Web server error: %v", err)
-			cancel()
-		}
-	}()
+	if err := server.Start(ctx); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
 
 	// Wait for shutdown signal
 	<-ctx.Done()

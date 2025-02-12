@@ -1,59 +1,106 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
-	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/notify"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/config"
+	"github.com/christiaanpauw/swarmgo_dropbox_monitor/internal/container"
 	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Printf("Warning: .env file not found or error loading it: %v", err)
-	}
-
-	// Command line flags
-	smtpServer := flag.String("smtp-server", os.Getenv("SMTP_SERVER"), "SMTP server address")
-	smtpPort := flag.String("smtp-port", os.Getenv("SMTP_PORT"), "SMTP server port")
-	username := flag.String("username", os.Getenv("SMTP_USERNAME"), "SMTP username")
-	password := flag.String("password", os.Getenv("SMTP_PASSWORD"), "SMTP password")
-	fromEmail := flag.String("from", os.Getenv("FROM_EMAIL"), "From email address")
-	toEmails := flag.String("to", os.Getenv("TO_EMAILS"), "Comma-separated list of recipient email addresses")
-	subject := flag.String("subject", "Test Email", "Email subject")
-	body := flag.String("body", "This is a test email from the Dropbox Monitor application.", "Email body")
+	var (
+		envFile     = flag.String("env", ".env", "Path to .env file")
+		message     = flag.String("message", "Test email from Dropbox Monitor", "Email message to send")
+		useEnvFile  = flag.Bool("use-env", true, "Use environment file for configuration")
+		smtpHost    = flag.String("smtp-host", "", "SMTP server host (overrides env)")
+		smtpPort    = flag.Int("smtp-port", 587, "SMTP server port (overrides env)")
+		smtpUser    = flag.String("smtp-user", "", "SMTP username (overrides env)")
+		smtpPass    = flag.String("smtp-pass", "", "SMTP password (overrides env)")
+		fromEmail   = flag.String("from", "", "From email address (overrides env)")
+		toEmails    = flag.String("to", "", "Comma-separated list of recipient email addresses (overrides env)")
+	)
 
 	flag.Parse()
 
-	// Validate required fields
-	if *smtpServer == "" || *smtpPort == "" || *username == "" || *password == "" || *fromEmail == "" || *toEmails == "" {
-		log.Fatal("All SMTP settings are required. Use -h for help.")
+	// Load environment variables if requested
+	if *useEnvFile {
+		if err := godotenv.Load(*envFile); err != nil {
+			log.Printf("Warning: Error loading .env file: %v", err)
+		}
 	}
 
-	// Override environment variables with command line flags
-	os.Setenv("SMTP_SERVER", *smtpServer)
-	os.Setenv("SMTP_PORT", *smtpPort)
-	os.Setenv("SMTP_USERNAME", *username)
-	os.Setenv("SMTP_PASSWORD", *password)
-	os.Setenv("FROM_EMAIL", *fromEmail)
-	os.Setenv("TO_EMAILS", *toEmails)
+	// Create email config, preferring command line args over env vars
+	emailConfig := &config.EmailConfig{
+		SMTPHost:     getConfigValue(*smtpHost, "SMTP_SERVER"),
+		SMTPPort:     *smtpPort,
+		SMTPUsername: getConfigValue(*smtpUser, "SMTP_USERNAME"),
+		SMTPPassword: getConfigValue(*smtpPass, "SMTP_PASSWORD"),
+		FromAddress:  getConfigValue(*fromEmail, "FROM_EMAIL"),
+		ToAddresses:  getToAddresses(*toEmails),
+	}
 
-	// Create notifier
-	notifier := notify.NewNotifier()
+	// Validate configuration
+	if err := validateConfig(emailConfig); err != nil {
+		fmt.Fprintln(os.Stderr, "Configuration error:", err)
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	// Create container with email configuration
+	cfg := &config.Config{
+		EmailConfig: emailConfig,
+	}
+	c, err := container.NewContainer(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create container: %v", err)
+	}
+
+	// Get notifier from container
+	notifier := c.GetNotifier()
 
 	// Send test email
-	recipients := strings.Split(*toEmails, ",")
-	fmt.Printf("Sending test email to: %v\n", recipients)
-	fmt.Printf("Using SMTP server: %s:%s\n", *smtpServer, *smtpPort)
-	fmt.Printf("From: %s\n", *fromEmail)
-
-	if err := notifier.SendEmail(recipients, *subject, *body); err != nil {
-		log.Fatalf("Failed to send email: %v", err)
+	ctx := context.Background()
+	if err := notifier.SendNotification(ctx, *message); err != nil {
+		log.Fatalf("Failed to send test email: %v", err)
 	}
 
-	fmt.Println("Email sent successfully!")
+	fmt.Println("Test email sent successfully!")
+}
+
+func getConfigValue(flagValue, envKey string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return os.Getenv(envKey)
+}
+
+func getToAddresses(flagValue string) []string {
+	if flagValue != "" {
+		return []string{flagValue}
+	}
+	return []string{os.Getenv("TO_EMAILS")}
+}
+
+func validateConfig(cfg *config.EmailConfig) error {
+	if cfg.SMTPHost == "" {
+		return fmt.Errorf("SMTP host is required")
+	}
+	if cfg.SMTPUsername == "" {
+		return fmt.Errorf("SMTP username is required")
+	}
+	if cfg.SMTPPassword == "" {
+		return fmt.Errorf("SMTP password is required")
+	}
+	if cfg.FromAddress == "" {
+		return fmt.Errorf("From email address is required")
+	}
+	if len(cfg.ToAddresses) == 0 || cfg.ToAddresses[0] == "" {
+		return fmt.Errorf("At least one recipient email address is required")
+	}
+	return nil
 }
